@@ -1,4 +1,4 @@
-module agent-langchian
+module agent-langchain
 
 go 1.25.6
 
