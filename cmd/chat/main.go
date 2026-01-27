@@ -21,6 +21,7 @@ import (
 	"agent-langchain/internal/models"
 	"agent-langchain/internal/rag"
 	"agent-langchain/internal/tools"
+	"agent-langchain/internal/utils"
 )
 
 // 彩色输出常量
@@ -656,6 +657,16 @@ func main() {
 				red("%s: %s\n", msg.Role, msg.Content)
 			}
 			blue("\nLLM思考过程：正在生成回复...\n")
+
+			// 显示上下文窗口统计
+			stats := utils.CalculateContextStats(
+				system,
+				structuredText+"\n"+recalled.String(),
+				short.String(),
+				userText,
+				chatModelName,
+			)
+			fmt.Print(utils.FormatContextStats(stats))
 		}
 
 		// 4) 生成回复（使用流式响应）
