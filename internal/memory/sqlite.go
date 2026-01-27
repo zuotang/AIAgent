@@ -38,12 +38,23 @@ CREATE TABLE IF NOT EXISTS memories (
   confidence REAL NOT NULL DEFAULT 0.7,
   owner TEXT NOT NULL DEFAULT 'user',
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  access_count INTEGER NOT NULL DEFAULT 0,
+  last_accessed_at DATETIME,
   UNIQUE(user_id, mtype, mkey, owner)
 );
 
 `
 	_, err := s.db.Exec(ddl)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// 添加新字段（如果表已存在但没有这些字段）
+	// SQLite的ALTER TABLE ADD COLUMN是幂等的，如果列已存在会报错但不影响
+	s.db.Exec(`ALTER TABLE memories ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0`)
+	s.db.Exec(`ALTER TABLE memories ADD COLUMN last_accessed_at DATETIME`)
+
+	return nil
 }
 
 // UpsertExtractedMemories：把“记忆提取器”输出写入 SQLite（可覆盖更新）
@@ -100,6 +111,12 @@ LIMIT ?`, userID, limit)
 	defer rows.Close()
 
 	out := "【结构化长期记忆(SQLite)】\n"
+	var accessedMemories []struct {
+		mtype string
+		mkey  string
+		owner string
+	}
+
 	for rows.Next() {
 		var t, k, v, owner string
 		var c float64
@@ -107,7 +124,20 @@ LIMIT ?`, userID, limit)
 			return "", err
 		}
 		out += "- " + owner + ": " + t + "." + k + " = " + v + " (conf=" + format2(c) + ")\n"
+
+		// 记录访问的记忆
+		accessedMemories = append(accessedMemories, struct {
+			mtype string
+			mkey  string
+			owner string
+		}{t, k, owner})
 	}
+
+	// 异步更新访问统计
+	if len(accessedMemories) > 0 {
+		go s.updateAccessStats(context.Background(), userID, accessedMemories)
+	}
+
 	return out, nil
 }
 
@@ -126,4 +156,81 @@ func format2(f float64) string {
 }
 func twoDigits(n int) string {
 	return string('0'+(n/10)) + string('0'+(n%10))
+}
+
+// updateAccessStats 异步更新访问统计
+func (s *Store) updateAccessStats(ctx context.Context, userID string, memories []struct {
+	mtype string
+	mkey  string
+	owner string
+}) {
+	if len(memories) == 0 {
+		return
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx, `
+		UPDATE memories
+		SET access_count = access_count + 1,
+		    last_accessed_at = ?
+		WHERE user_id = ? AND mtype = ? AND mkey = ? AND owner = ?
+	`)
+	if err != nil {
+		return
+	}
+	defer stmt.Close()
+
+	now := time.Now().Format(time.RFC3339)
+	for _, m := range memories {
+		stmt.ExecContext(ctx, now, userID, m.mtype, m.mkey, m.owner)
+	}
+
+	tx.Commit()
+}
+
+// GetTopAccessedMemories 获取最常访问的记忆
+func (s *Store) GetTopAccessedMemories(ctx context.Context, userID string, limit int) ([]MemoryStats, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT mtype, mkey, mvalue, owner, confidence, access_count, last_accessed_at, updated_at
+		FROM memories
+		WHERE user_id = ? AND access_count > 0
+		ORDER BY access_count DESC, last_accessed_at DESC
+		LIMIT ?
+	`, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var stats []MemoryStats
+	for rows.Next() {
+		var s MemoryStats
+		var lastAccessed sql.NullString
+		if err := rows.Scan(&s.Type, &s.Key, &s.Value, &s.Owner, &s.Confidence, &s.AccessCount, &lastAccessed, &s.UpdatedAt); err != nil {
+			continue
+		}
+		if lastAccessed.Valid {
+			s.LastAccessed = lastAccessed.String
+		}
+		stats = append(stats, s)
+	}
+
+	return stats, nil
+}
+
+// MemoryStats 记忆统计信息
+type MemoryStats struct {
+	Type         string
+	Key          string
+	Value        string
+	Owner        string
+	Confidence   float64
+	AccessCount  int
+	LastAccessed string
+	UpdatedAt    string
 }

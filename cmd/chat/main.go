@@ -91,6 +91,47 @@ func extractToolCall(response string) *ToolCall {
 	}
 }
 
+// showMemoryStats 显示记忆访问统计
+func showMemoryStats(cfg *config.Config, userID string) {
+	// 初始化数据库
+	mem, err := memory.New(cfg.Database.Path)
+	if err != nil {
+		log.Fatalf("打开数据库失败: %v", err)
+	}
+	defer mem.Close()
+
+	// 获取统计信息
+	stats, err := mem.GetTopAccessedMemories(context.Background(), userID, 20)
+	if err != nil {
+		log.Fatalf("获取统计信息失败: %v", err)
+	}
+
+	if len(stats) == 0 {
+		fmt.Printf("用户 %s 还没有访问记录\n", userID)
+		return
+	}
+
+	// 显示统计信息
+	fmt.Println(strings.Repeat("=", 80))
+	fmt.Printf("记忆访问统计 - 用户: %s\n", userID)
+	fmt.Println(strings.Repeat("=", 80))
+	fmt.Println()
+
+	for i, s := range stats {
+		fmt.Printf("%d. [%s/%s] %s = %s\n", i+1, s.Owner, s.Type, s.Key, s.Value)
+		fmt.Printf("   访问次数: %d 次\n", s.AccessCount)
+		fmt.Printf("   置信度: %.2f\n", s.Confidence)
+		if s.LastAccessed != "" {
+			fmt.Printf("   最后访问: %s\n", s.LastAccessed)
+		}
+		fmt.Printf("   更新时间: %s\n", s.UpdatedAt)
+		fmt.Println()
+	}
+
+	fmt.Println(strings.Repeat("=", 80))
+	fmt.Printf("共 %d 条记忆\n", len(stats))
+}
+
 type WindowMemory struct {
 	N     int
 	Turns []Turn
@@ -391,6 +432,8 @@ func extractMemories(ctx context.Context, llm models.LLMClient, recentTurns, use
 func main() {
 	// 只保留配置文件路径参数
 	configFile := flag.String("config", "config.deepseek.yaml", "配置文件路径")
+	showStats := flag.Bool("stats", false, "显示记忆访问统计")
+	statsUser := flag.String("user", "local", "查看统计的用户ID")
 	flag.Parse()
 
 	// 加载配置文件
@@ -402,6 +445,12 @@ func main() {
 	// 验证配置
 	if err := cfg.Validate(); err != nil {
 		log.Fatalf("配置验证失败: %v", err)
+	}
+
+	// 如果是查看统计模式
+	if *showStats {
+		showMemoryStats(cfg, *statsUser)
+		return
 	}
 
 	// 支持 Ctrl+C / kill 优雅退出
