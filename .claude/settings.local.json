@@ -6,7 +6,9 @@
       "Bash(go mod tidy:*)",
       "Bash(./chat.exe:*)",
       "Bash(curl:*)",
-      "Bash(go test:*)"
+      "Bash(go test:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ]
   }
 }
