@@ -82,7 +82,17 @@ func (s *Store) RenderStructuredMemory(ctx context.Context, userID string, limit
 SELECT mtype,mkey,mvalue,confidence,owner
 FROM memories
 WHERE user_id=?
-ORDER BY updated_at DESC
+ORDER BY
+  CASE mtype
+    WHEN 'identity' THEN 1
+    WHEN 'preference' THEN 2
+    WHEN 'goal' THEN 3
+    WHEN 'knowledge' THEN 4
+    WHEN 'context' THEN 5
+    ELSE 9
+  END,
+  confidence DESC,
+  updated_at DESC
 LIMIT ?`, userID, limit)
 	if err != nil {
 		return "", err

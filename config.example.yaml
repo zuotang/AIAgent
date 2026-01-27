@@ -1,0 +1,38 @@
+# AI Agent 配置文件
+
+# LLM 提供商: ollama 或 deepseek
+provider: ollama
+
+# Ollama 配置
+ollama:
+  base_url: http://127.0.0.1:11434
+  chat_model: gemma3:12b
+  embed_model: nomic-embed-text
+
+# DeepSeek 配置
+deepseek:
+  base_url: https://api.deepseek.com/v1  # DeepSeek API 基础 URL
+  api_key: ""  # 在这里填入你的 DeepSeek API Key
+  chat_model: deepseek-chat
+
+# Qdrant 向量数据库配置
+qdrant:
+  base_url: http://127.0.0.1:6333
+  api_key: ""  # Qdrant API Key（可选，如果 Qdrant 启用了认证）
+  collection: memories
+  top_k: 6  # 语义检索返回的最大结果数
+
+# SQLite 数据库配置
+database:
+  path: memory.db
+
+# 记忆配置
+memory:
+  window_size: 8  # 短期记忆窗口大小（对话轮数）
+  extractor_model: ""  # 记忆提取模型（留空则使用 chat_model）
+
+# 调试模式
+debug: false
+
+# 超时时间（秒）
+timeout: 60

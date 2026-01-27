@@ -9,6 +9,17 @@ import (
 	"time"
 )
 
+// LLMClient 定义 LLM 客户端接口
+type LLMClient interface {
+	Chat(ctx context.Context, msgs []ChatMessage, model ...string) (string, error)
+	SetDebug(debug bool)
+}
+
+// EmbedClient 定义 Embedding 客户端接口
+type EmbedClient interface {
+	Embed(ctx context.Context, text string) ([]float32, error)
+}
+
 type Client struct {
 	BaseURL   string
 	ChatModel string

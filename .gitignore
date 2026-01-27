@@ -1,0 +1,25 @@
+# 编译产物
+*.exe
+chat
+
+# 数据库文件
+*.db
+
+# 配置文件（包含敏感信息）
+config.yaml
+config.*.yaml
+!config.example.yaml
+
+# 依赖
+vendor/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 操作系统
+.DS_Store
+Thumbs.db

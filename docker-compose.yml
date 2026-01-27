@@ -1,0 +1,17 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    ports:
+      - "6333:6333"  # HTTP API 端口
+      - "6334:6334"  # gRPC API 端口
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__API_KEY=your_api_key_here  # 可选：设置 API 密钥
+      - QDRANT__LOG_LEVEL=info  # 日志级别
+    restart: unless-stopped
+
+volumes:
+  qdrant_data:
+    driver: local

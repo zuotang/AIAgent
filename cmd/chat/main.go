@@ -16,9 +16,11 @@ import (
 	"syscall"
 	"time"
 
+	"agent-langchain/internal/config"
 	"agent-langchain/internal/memory"
 	"agent-langchain/internal/models"
 	"agent-langchain/internal/rag"
+	"agent-langchain/internal/tools"
 )
 
 // 彩色输出常量
@@ -47,6 +49,48 @@ type Turn struct {
 	Assistant string
 }
 
+type ToolCall struct {
+	ToolName  string
+	Arguments string
+}
+
+// extractToolCall 从LLM响应中提取工具调用
+// 格式: TOOL_CALL: tool_name("arguments")
+func extractToolCall(response string) *ToolCall {
+	// 查找 TOOL_CALL: 标记
+	idx := strings.Index(response, "TOOL_CALL:")
+	if idx == -1 {
+		return nil
+	}
+
+	// 提取工具调用部分
+	callPart := strings.TrimSpace(response[idx+len("TOOL_CALL:"):])
+
+	// 解析工具名和参数
+	// 格式: tool_name("arguments")
+	openParen := strings.Index(callPart, "(")
+	if openParen == -1 {
+		return nil
+	}
+
+	toolName := strings.TrimSpace(callPart[:openParen])
+
+	// 查找匹配的右括号
+	closeParen := strings.LastIndex(callPart, ")")
+	if closeParen == -1 || closeParen <= openParen {
+		return nil
+	}
+
+	// 提取参数（去除引号）
+	args := callPart[openParen+1 : closeParen]
+	args = strings.Trim(args, `"'`)
+
+	return &ToolCall{
+		ToolName:  toolName,
+		Arguments: args,
+	}
+}
+
 type WindowMemory struct {
 	N     int
 	Turns []Turn
@@ -73,8 +117,8 @@ func (m *WindowMemory) String() string {
 
 var (
 	validTypes = map[string]bool{
-		"identity": true, "preference": true, "goal": true, "tool": true,
-		"constraint": true, "fact": true, "activity": true, "duration": true,
+		"identity": true, "preference": true, "goal": true,
+		"context": true, "knowledge": true,
 	}
 	validOwners = map[string]bool{"user": true, "agent": true}
 	keyRe       = regexp.MustCompile(`^[a-z0-9_]+$`)
@@ -87,6 +131,14 @@ func normalize(m memory.ExtractedMemory) memory.ExtractedMemory {
 	m.Owner = strings.TrimSpace(strings.ToLower(m.Owner))
 	m.Value = strings.TrimSpace(m.Value)
 	m.Text = strings.TrimSpace(m.Text)
+
+	// 旧类型迁移到新类型（兼容性处理）
+	switch m.Type {
+	case "tool", "constraint", "fact", "duration":
+		m.Type = "context" // 工具、约束、事实、时长 -> 上下文信息
+	case "activity":
+		m.Type = "preference" // 活动习惯 -> 偏好
+	}
 
 	// 同义归一（按你 schema 扩展）
 	switch m.Type {
@@ -152,6 +204,52 @@ func fingerprint(owner, typ, key, val string) string {
 	return hex.EncodeToString(h[:])
 }
 
+// deduplicateSemanticMemories 去除与结构化记忆重复的语义记忆
+func deduplicateSemanticMemories(structuredText string, semanticDocs []rag.Doc) []rag.Doc {
+	if structuredText == "" || len(semanticDocs) == 0 {
+		return semanticDocs
+	}
+
+	// 提取结构化记忆中的关键词（简单实现：提取 value 部分）
+	structuredKeywords := make(map[string]bool)
+	lines := strings.Split(structuredText, "\n")
+	for _, line := range lines {
+		// 格式：- owner: type.key = value (conf=0.85)
+		if strings.Contains(line, " = ") {
+			parts := strings.Split(line, " = ")
+			if len(parts) >= 2 {
+				// 提取 value 部分（去除 confidence）
+				value := strings.Split(parts[1], " (conf=")[0]
+				value = strings.TrimSpace(strings.ToLower(value))
+				if value != "" {
+					structuredKeywords[value] = true
+				}
+			}
+		}
+	}
+
+	// 过滤语义记忆
+	result := make([]rag.Doc, 0, len(semanticDocs))
+	for _, doc := range semanticDocs {
+		content := strings.ToLower(doc.PageContent)
+		isDuplicate := false
+
+		// 检查是否与结构化记忆重复
+		for keyword := range structuredKeywords {
+			if len(keyword) > 3 && strings.Contains(content, keyword) {
+				isDuplicate = true
+				break
+			}
+		}
+
+		if !isDuplicate {
+			result = append(result, doc)
+		}
+	}
+
+	return result
+}
+
 func sanitizeAndFilter(ms []memory.ExtractedMemory) []memory.ExtractedMemory {
 	out := make([]memory.ExtractedMemory, 0, len(ms))
 	seen := map[string]struct{}{}
@@ -190,28 +288,61 @@ func sanitizeAndFilter(ms []memory.ExtractedMemory) []memory.ExtractedMemory {
 }
 
 // 记忆提取器
-func extractMemories(ctx context.Context, ollama *models.Client, recentTurns, userText, assistantText string, debug bool, extractorModel string) (ExtractorOutput, error) {
+func extractMemories(ctx context.Context, llm models.LLMClient, recentTurns, userText, assistantText string, debug bool, extractorModel string) (ExtractorOutput, error) {
 	sys := `你是"记忆提取器"。只输出严格 JSON，不要任何额外文字。
 
-目标：从对话中提取未来能提升个性化与效率的长期信息。
+目标：从对话中提取值得长期保存的信息。
 
-重要归属规则（owner）：
-- 从【用户输入】中提取的"关于用户自己的事实/偏好/长期目标" -> owner="user"
-- 从【用户输入】中提取的"关于助手/Agent自己的设定" -> owner="agent"
-- 从【助手回复】中提取的"关于助手自己设定（比如名字、风格）" -> owner="agent"
-- 不要把【助手回复】里对用户的"推测/迎合/复述"当成用户事实写入记忆（除非用户本轮明确确认）。
+【提取标准 - STABLE 原则】
+只提取满足以下所有条件的信息：
+1. Stable（稳定）：不会频繁变化
+2. Timeless（时间无关）：不依赖特定时间点
+3. Actionable（可操作）：未来可用于个性化
+4. Broad（广泛适用）：在多个场景有用
+5. Long-lasting（持久）：预期长期有效
+6. Explicit（明确）：用户明确表达的
 
-规则：
-- 只提取稳定、可复用的信息：偏好、身份信息、长期目标、常用工具/环境、重要约束、明确事实。
-- 不要保存敏感信息（账号密码、身份证、精确住址等）。
-- 不要保存短期一次性内容。
-- 每条记忆必须包含：type,key,value,confidence,also_vector,owner，text 可选。
-- key 必须是英文小写，用下划线分隔。
-- type 必须是 identity/preference/goal/tool/constraint/fact/activity/duration。
-- confidence 0~1；不确定就不要输出。
-- also_vector=true 表示写入 Qdrant 作为可检索语义记忆。
+【记忆类型】
+- identity: 身份信息（姓名、职业、年龄、技能等）
+- preference: 偏好习惯（喜好、风格、习惯、活动）
+- goal: 目标计划（学习目标、职业目标、项目目标）
+- context: 上下文信息（工具、环境、约束、事实）
+- knowledge: 知识技能（专业技能、经验、专长）
 
-输出格式：{"memories":[...]}（只输出JSON）`
+【归属规则 (owner)】
+- 从【用户输入】中提取的"关于用户自己的信息" -> owner="user"
+- 从【用户输入】中提取的"关于助手/Agent的设定" -> owner="agent"
+- 从【助手回复】中提取的"关于助手自己的设定" -> owner="agent"
+- 不要把【助手回复】里对用户的"推测/迎合/复述"当成用户事实（除非用户本轮明确确认）
+
+【不要提取】
+❌ 临时状态："今天很累"、"刚吃了饭"
+❌ 一次性事件："昨天开会"、"刚到公司"
+❌ 推测信息："可能喜欢"、"应该是"
+❌ 敏感信息：密码、身份证、精确住址、手机号、邮箱
+
+【输出格式】
+{
+  "memories": [
+    {
+      "type": "identity",
+      "key": "name",
+      "value": "张三",
+      "confidence": 1.0,
+      "also_vector": true,
+      "owner": "user",
+      "text": "用户名叫张三"
+    }
+  ]
+}
+
+要求：
+- key 必须是英文小写，用下划线分隔
+- confidence 范围 0~1，不确定就不要输出
+- also_vector=true 表示写入向量数据库作为可检索语义记忆
+- text 字段可选，用于提供更多上下文
+
+只输出 JSON，不要任何额外文字。`
 
 	// 注意：recentTurns 仅作为参考，本轮 user/assistant 单独传入，避免重复喂两份同样内容
 	prompt := fmt.Sprintf(`最近对话（供参考，带标签 [USER]/[ASSISTANT] ）：
@@ -230,7 +361,7 @@ func extractMemories(ctx context.Context, ollama *models.Client, recentTurns, us
 		{Role: "user", Content: prompt},
 	}
 
-	text, err := ollama.Chat(ctx, msgs, extractorModel)
+	text, err := llm.Chat(ctx, msgs, extractorModel)
 	if err != nil {
 		return ExtractorOutput{}, err
 	}
@@ -258,44 +389,71 @@ func extractMemories(ctx context.Context, ollama *models.Client, recentTurns, us
 }
 
 func main() {
-	var (
-		ollamaURL      = flag.String("ollama", "http://127.0.0.1:11434", "Ollama server URL")
-		qdrantURL      = flag.String("qdrant", "http://127.0.0.1:6333", "Qdrant URL")
-		collection     = flag.String("col", "memories", "Qdrant collection")
-		chatModel      = flag.String("chat", "gemma3:12b", "Chat model")
-		extractorModel = flag.String("extractor", "", "Extractor model (default: same as chat model)")
-		embModel       = flag.String("embed", "nomic-embed-text", "Embedding model")
-		topK           = flag.Int("k", 6, "TopK semantic recall")
-		dbPath         = flag.String("db", "memory.db", "SQLite path")
-		winN           = flag.Int("win", 8, "Short-term turns")
-		debug          = flag.Bool("debug", false, "Enable debug output")
-		timeoutSec     = flag.Int("timeout", 60, "Per-call timeout seconds (ollama/qdrant)")
-	)
+	// 只保留配置文件路径参数
+	configFile := flag.String("config", "config.deepseek.yaml", "配置文件路径")
 	flag.Parse()
+
+	// 加载配置文件
+	cfg, err := config.Load(*configFile)
+	if err != nil {
+		log.Fatalf("加载配置文件失败: %v", err)
+	}
+
+	// 验证配置
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("配置验证失败: %v", err)
+	}
 
 	// 支持 Ctrl+C / kill 优雅退出
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	ollama := models.New(*ollamaURL, *chatModel, *embModel)
-	ollama.SetDebug(*debug)
+	// 创建 LLM 客户端（用于聊天和记忆提取）
+	var llmClient models.LLMClient
+	var chatModelName string
+	switch cfg.Provider {
+	case "deepseek":
+		deepseek := models.NewDeepSeek(cfg.DeepSeek.BaseURL, cfg.DeepSeek.APIKey, cfg.DeepSeek.ChatModel)
+		deepseek.SetDebug(cfg.Debug)
+		llmClient = deepseek
+		chatModelName = cfg.DeepSeek.ChatModel
+		log.Printf("使用 DeepSeek API (base_url: %s, model: %s)", cfg.DeepSeek.BaseURL, chatModelName)
+	case "ollama":
+		ollama := models.New(cfg.Ollama.BaseURL, cfg.Ollama.ChatModel, cfg.Ollama.EmbedModel)
+		ollama.SetDebug(cfg.Debug)
+		llmClient = ollama
+		chatModelName = cfg.Ollama.ChatModel
+		log.Printf("使用 Ollama (model: %s)", chatModelName)
+	default:
+		log.Fatalf("Unknown provider: %s. Use 'ollama' or 'deepseek'", cfg.Provider)
+	}
+
+	// Embedding 始终使用 Ollama（DeepSeek 不支持 embedding）
+	ollamaEmbed := models.New(cfg.Ollama.BaseURL, cfg.Ollama.ChatModel, cfg.Ollama.EmbedModel)
+	ollamaEmbed.SetDebug(cfg.Debug)
+	log.Printf("使用 Ollama 进行 Embedding (base_url: %s, model: %s)", cfg.Ollama.BaseURL, cfg.Ollama.EmbedModel)
 
 	// SQLite store
-	mem, err := memory.New(*dbPath)
+	mem, err := memory.New(cfg.Database.Path)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer mem.Close()
 
-	// Qdrant store
-	store := rag.NewStoreFromOllama(*qdrantURL, *collection, ollama)
+	// Qdrant store（使用 Ollama 的 embedding）
+	store := rag.NewStoreFromOllama(cfg.Qdrant.BaseURL, cfg.Qdrant.APIKey, cfg.Qdrant.Collection, ollamaEmbed)
+	if cfg.Qdrant.APIKey != "" {
+		log.Printf("使用 Qdrant (base_url: %s, 已启用 API Key 认证)", cfg.Qdrant.BaseURL)
+	} else {
+		log.Printf("使用 Qdrant (base_url: %s)", cfg.Qdrant.BaseURL)
+	}
 
 	// 先做一次 embedding 拿维度，确保 collection 存在（加超时）
 	{
-		callCtx, cancel := context.WithTimeout(ctx, time.Duration(*timeoutSec)*time.Second)
+		callCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.Timeout)*time.Second)
 		defer cancel()
 
-		testVec, err := ollama.Embed(callCtx, "init")
+		testVec, err := ollamaEmbed.Embed(callCtx, "init")
 		if err != nil {
 			log.Fatalf("ollama embedding failed: %v", err)
 		}
@@ -313,11 +471,11 @@ func main() {
 	}
 
 	// 短期记忆窗口
-	short := NewWindowMemory(*winN)
+	short := NewWindowMemory(cfg.Memory.WindowSize)
 	fmt.Printf("AI Agent（user=%s，输入 exit 退出）\n", uid)
 
-	// system：统一口径为“陪聊”，避免和“步骤/清单/示例”的专业要求打架
-	system := `你是一个陪聊 Agent。
+	// system：统一口径为"陪聊"，避免和"步骤/清单/示例"的专业要求打架
+	system := `你是一个陪聊 Agent，具备工具调用能力。
 核心：
 - 轻松陪伴、共情倾听、自然互动，主打闲聊解闷、情绪疏导，不做专业解答或长篇科普。
 互动：
@@ -326,8 +484,25 @@ func main() {
 - 不追问隐私、不聊敏感争议话题、不输出负能量、不强行主导话题。
 原则：
 - 先接情绪再回应；口语化不生硬；正向但不鸡汤。
-- 你会参考“结构化长期记忆(SQLite)”和“语义长期记忆(Qdrant)”来保持一致性与个性化，但不要把记忆内容原样泄露给用户（除非用户要求你总结）。
-- 【重要】长期记忆里：agent 表示你（assistant），user 表示用户本人，严禁混用。`
+- 你会参考"结构化长期记忆(SQLite)"和"语义长期记忆(Qdrant)"来保持一致性与个性化，但不要把记忆内容原样泄露给用户（除非用户要求你总结）。
+- 【重要】长期记忆里：agent 表示你（assistant），user 表示用户本人，严禁混用。
+
+【工具能力】
+你可以使用以下工具来帮助用户：
+
+1. **calculator** - 数学计算工具
+   - 用途：进行数学计算（加减乘除、幂运算、平方根等）
+   - 使用方式：当用户询问数学问题时，在回复中使用：TOOL_CALL: calculator("表达式")
+   - 示例：
+     * 用户："2的10次方是多少？" → 回复：TOOL_CALL: calculator("2^10")
+     * 用户："计算 (5+3)*4" → 回复：TOOL_CALL: calculator("(5+3)*4")
+     * 用户："16的平方根" → 回复：TOOL_CALL: calculator("sqrt(16)")
+   - 支持的操作：+, -, *, /, ^(幂), sqrt(平方根), abs(绝对值)
+
+【重要】当需要使用工具时：
+1. 直接输出 TOOL_CALL: tool_name("参数")，不要添加其他文字
+2. 工具执行后，你会收到结果，然后基于结果给用户自然的回复
+3. 只在确实需要计算时使用工具，不要滥用`
 
 	for {
 		select {
@@ -347,31 +522,54 @@ func main() {
 			return
 		}
 
-		// 1) 结构化长期记忆（SQLite）
-		var structuredText string
-		{
-			callCtx, cancel := context.WithTimeout(ctx, time.Duration(*timeoutSec)*time.Second)
-			structuredText, _ = mem.RenderStructuredMemory(callCtx, uid, 30)
-			cancel()
+		// 1) 并行查询结构化记忆和语义记忆
+		type memoryResult struct {
+			structured string
+			semantic   []rag.Doc
+			err        error
 		}
 
-		// 2) 语义回忆（Qdrant，按 user_id 过滤）
-		var recalledDocs []rag.Doc
-		{
-			callCtx, cancel := context.WithTimeout(ctx, time.Duration(*timeoutSec)*time.Second)
-			recalledDocs, err = store.SimilaritySearch(callCtx, uid, userText, *topK)
-			cancel()
-			if err != nil {
-				log.Fatal(err)
-			}
+		structuredCh := make(chan memoryResult, 1)
+		semanticCh := make(chan memoryResult, 1)
+
+		// 并行查询 SQLite
+		go func() {
+			callCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.Timeout)*time.Second)
+			defer cancel()
+			text, err := mem.RenderStructuredMemory(callCtx, uid, 30)
+			structuredCh <- memoryResult{structured: text, err: err}
+		}()
+
+		// 并行查询 Qdrant
+		go func() {
+			callCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.Timeout)*time.Second)
+			defer cancel()
+			docs, err := store.SimilaritySearch(callCtx, uid, userText, cfg.Qdrant.TopK)
+			semanticCh <- memoryResult{semantic: docs, err: err}
+		}()
+
+		// 收集结果
+		structuredResult := <-structuredCh
+		semanticResult := <-semanticCh
+
+		if structuredResult.err != nil && cfg.Debug {
+			log.Printf("SQLite 查询失败: %v", structuredResult.err)
 		}
+		if semanticResult.err != nil {
+			log.Fatal(semanticResult.err)
+		}
+
+		structuredText := structuredResult.structured
+		recalledDocs := semanticResult.semantic
+
+		// 去重：移除与结构化记忆重复的语义记忆
+		recalledDocs = deduplicateSemanticMemories(structuredText, recalledDocs)
 
 		var recalled strings.Builder
 		recalled.WriteString("【语义长期记忆(Qdrant)】\n")
-		// 控制回忆噪声：每条截断 + 最多保留 5 条
-		maxRecall := 5
+		// 使用配置的 top_k 值，不再硬编码
 		for i, d := range recalledDocs {
-			if i >= maxRecall {
+			if i >= cfg.Qdrant.TopK {
 				break
 			}
 			recalled.WriteString("- " + truncate(d.PageContent, 220) + "\n")
@@ -403,7 +601,7 @@ func main() {
 		}
 
 		// debug: 红色输出发送内容，蓝色提示生成中
-		if *debug {
+		if cfg.Debug {
 			red("\n发送给LLM的内容：\n")
 			for _, msg := range msgs {
 				red("%s: %s\n", msg.Role, msg.Content)
@@ -415,38 +613,99 @@ func main() {
 		recentBeforeAdd := short.String() // ✅ 提取记忆用：避免本轮重复喂两份
 		var assistantText string
 		{
-			callCtx, cancel := context.WithTimeout(ctx, time.Duration(*timeoutSec)*time.Second)
-			assistantText, err = ollama.Chat(callCtx, msgs)
+			callCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.Timeout)*time.Second)
+			assistantText, err = llmClient.Chat(callCtx, msgs)
 			cancel()
 			if err != nil {
 				log.Fatal(err)
 			}
 		}
 
-		if *debug {
+		if cfg.Debug {
 			blue("思考完成\n")
 		}
+
+		// 4.5) 检测并执行工具调用
+		if strings.Contains(assistantText, "TOOL_CALL:") {
+			// 提取工具调用
+			toolCall := extractToolCall(assistantText)
+			if toolCall != nil {
+				if cfg.Debug {
+					log.Printf("检测到工具调用: %s(%s)", toolCall.ToolName, toolCall.Arguments)
+				}
+
+				// 执行工具
+				var toolResult string
+				switch toolCall.ToolName {
+				case "calculator":
+					calc := &tools.CalculatorTool{}
+					callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+					result, err := calc.Execute(callCtx, toolCall.Arguments)
+					cancel()
+					if err != nil {
+						toolResult = fmt.Sprintf("计算错误: %v", err)
+					} else {
+						toolResult = result
+					}
+				default:
+					toolResult = fmt.Sprintf("未知工具: %s", toolCall.ToolName)
+				}
+
+				if cfg.Debug {
+					log.Printf("工具执行结果: %s", toolResult)
+				}
+
+				// 将工具结果反馈给LLM，生成最终回复
+				toolFeedbackPrompt := fmt.Sprintf(`工具执行结果：
+工具: %s
+输入: %s
+输出: %s
+
+请基于这个结果，用自然的语言回复用户。不要重复工具调用格式，直接给出友好的回答。`, toolCall.ToolName, toolCall.Arguments, toolResult)
+
+				msgs = append(msgs, models.ChatMessage{
+					Role:    "assistant",
+					Content: assistantText,
+				}, models.ChatMessage{
+					Role:    "user",
+					Content: toolFeedbackPrompt,
+				})
+
+				// 再次调用LLM生成最终回复
+				callCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.Timeout)*time.Second)
+				assistantText, err = llmClient.Chat(callCtx, msgs)
+				cancel()
+				if err != nil {
+					log.Fatal(err)
+				}
+
+				if cfg.Debug {
+					blue("基于工具结果生成最终回复\n")
+				}
+			}
+		}
+
 		fmt.Println("\nAI：", assistantText)
 
 		// 5) 自主学习：反思提取 -> 清洗校验 -> 写 SQLite/Qdrant（提取前不要 short.Add，避免重复上下文）
-		extractorModelToUse := *extractorModel
+		extractorModelToUse := cfg.Memory.ExtractorModel
 		if extractorModelToUse == "" {
-			extractorModelToUse = *chatModel
+			extractorModelToUse = chatModelName
 		}
 
 		var extracted ExtractorOutput
 		{
-			callCtx, cancel := context.WithTimeout(ctx, time.Duration(*timeoutSec)*time.Second)
-			extracted, err = extractMemories(callCtx, ollama, recentBeforeAdd, userText, assistantText, *debug, extractorModelToUse)
+			callCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.Timeout)*time.Second)
+			extracted, err = extractMemories(callCtx, llmClient, recentBeforeAdd, userText, assistantText, cfg.Debug, extractorModelToUse)
 			cancel()
-			if err != nil && *debug {
+			if err != nil && cfg.Debug {
 				log.Printf("提取记忆失败: %v", err)
 			}
 		}
 
 		clean := sanitizeAndFilter(extracted.Memories)
 
-		if *debug && len(extracted.Memories) > 0 {
+		if cfg.Debug && len(extracted.Memories) > 0 {
 			log.Printf("提取到 %d 条记忆，清洗后 %d 条", len(extracted.Memories), len(clean))
 			for i, m := range clean {
 				log.Printf("记忆 %d: type=%s, key=%s, value=%s, confidence=%.2f, also_vector=%t, owner=%s, text=%s",
@@ -457,12 +716,12 @@ func main() {
 		if len(clean) > 0 {
 			// 写入 SQLite 结构化记忆（加超时）
 			{
-				callCtx, cancel := context.WithTimeout(ctx, time.Duration(*timeoutSec)*time.Second)
+				callCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.Timeout)*time.Second)
 				if err := mem.UpsertExtractedMemories(callCtx, uid, clean); err != nil {
-					if *debug {
+					if cfg.Debug {
 						log.Printf("写入 SQLite 失败: %v", err)
 					}
-				} else if *debug {
+				} else if cfg.Debug {
 					log.Printf("成功写入 SQLite 结构化记忆")
 				}
 				cancel()
@@ -489,17 +748,17 @@ func main() {
 				vectorTexts = append(vectorTexts, truncate(vt, 240))
 			}
 
-			if *debug {
+			if cfg.Debug {
 				log.Printf("准备写入 Qdrant 的语义记忆数量: %d", len(vectorTexts))
 			}
 
 			if len(vectorTexts) > 0 {
-				callCtx, cancel := context.WithTimeout(ctx, time.Duration(*timeoutSec)*time.Second)
+				callCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.Timeout)*time.Second)
 				if err := store.UpsertTexts(callCtx, uid, vectorTexts); err != nil {
-					if *debug {
+					if cfg.Debug {
 						log.Printf("写入 Qdrant 失败: %v", err)
 					}
-				} else if *debug {
+				} else if cfg.Debug {
 					log.Printf("成功写入 Qdrant 语义记忆")
 				}
 				cancel()

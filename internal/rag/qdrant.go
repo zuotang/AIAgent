@@ -26,6 +26,10 @@ func (s *QdrantStore) doWithRetry(ctx context.Context, reqFn func() (*http.Reque
 			}
 			continue
 		}
+		// 如果配置了 API Key，添加认证头
+		if s.APIKey != "" {
+			req.Header.Set("api-key", s.APIKey)
+		}
 		resp, err := s.HTTP.Do(req)
 		if err == nil {
 			return resp, nil
@@ -46,14 +50,16 @@ type Doc struct {
 
 type QdrantStore struct {
 	BaseURL    string
+	APIKey     string // Qdrant API Key（可选）
 	Collection string
 	Embedder   func(context.Context, string) ([]float32, error)
 	HTTP       *http.Client
 }
 
-func NewQdrantStore(qdrantURL, collection string, embedder func(context.Context, string) ([]float32, error)) *QdrantStore {
+func NewQdrantStore(qdrantURL, apiKey, collection string, embedder func(context.Context, string) ([]float32, error)) *QdrantStore {
 	return &QdrantStore{
 		BaseURL:    qdrantURL,
+		APIKey:     apiKey,
 		Collection: collection,
 		Embedder:   embedder,
 		HTTP: &http.Client{
@@ -216,6 +222,6 @@ func randomID() string {
 }
 
 // 方便：从 models.Client 直接构造 store
-func NewStoreFromOllama(qdrantURL, collection string, ollama *models.Client) *QdrantStore {
-	return NewQdrantStore(qdrantURL, collection, ollama.Embed)
+func NewStoreFromOllama(qdrantURL, apiKey, collection string, ollama *models.Client) *QdrantStore {
+	return NewQdrantStore(qdrantURL, apiKey, collection, ollama.Embed)
 }
