@@ -1,10 +1,12 @@
 package models
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 )
@@ -98,6 +100,96 @@ func (c *Client) Chat(ctx context.Context, msgs []ChatMessage, model ...string) 
 	}
 	
 	return out.Message.Content, nil
+}
+
+// ChatStream 流式聊天，返回token流
+func (c *Client) ChatStream(ctx context.Context, msgs []ChatMessage, model ...string) (<-chan string, <-chan error) {
+	tokenCh := make(chan string, 100)
+	errCh := make(chan error, 1)
+
+	go func() {
+		defer close(tokenCh)
+		defer close(errCh)
+
+		// 确定使用的模型
+		useModel := c.ChatModel
+		if len(model) > 0 && model[0] != "" {
+			useModel = model[0]
+		}
+
+		reqBody := map[string]any{
+			"model":    useModel,
+			"messages": msgs,
+			"stream":   true, // 启用流式模式
+		}
+		b, _ := json.Marshal(reqBody)
+
+		// 调试输出
+		if c.Debug {
+			fmt.Printf("[DEBUG] 发送流式请求到 Ollama API (model: %s)\n", useModel)
+		}
+
+		req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/api/chat", bytes.NewReader(b))
+		if err != nil {
+			errCh <- err
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := c.HTTP.Do(req)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode >= 300 {
+			errCh <- fmt.Errorf("ollama chat stream http %d", resp.StatusCode)
+			return
+		}
+
+		// 逐行读取流式响应
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			line := scanner.Bytes()
+			if len(line) == 0 {
+				continue
+			}
+
+			var chunk struct {
+				Message struct {
+					Content string `json:"content"`
+				} `json:"message"`
+				Done bool `json:"done"`
+			}
+
+			if err := json.Unmarshal(line, &chunk); err != nil {
+				// 忽略解析错误，继续处理下一行
+				continue
+			}
+
+			// 发送token到channel
+			if chunk.Message.Content != "" {
+				select {
+				case tokenCh <- chunk.Message.Content:
+				case <-ctx.Done():
+					errCh <- ctx.Err()
+					return
+				}
+			}
+
+			// 如果完成，退出循环
+			if chunk.Done {
+				break
+			}
+		}
+
+		if err := scanner.Err(); err != nil && err != io.EOF {
+			errCh <- err
+		}
+	}()
+
+	return tokenCh, errCh
 }
 
 func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {

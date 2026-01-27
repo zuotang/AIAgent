@@ -609,15 +609,39 @@ func main() {
 			blue("\nLLM思考过程：正在生成回复...\n")
 		}
 
-		// 4) 生成回复（加超时）
+		// 4) 生成回复（使用流式响应）
 		recentBeforeAdd := short.String() // ✅ 提取记忆用：避免本轮重复喂两份
 		var assistantText string
 		{
 			callCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.Timeout)*time.Second)
-			assistantText, err = llmClient.Chat(callCtx, msgs)
-			cancel()
-			if err != nil {
-				log.Fatal(err)
+			defer cancel()
+
+			// 尝试使用流式响应（仅Ollama支持）
+			if ollamaClient, ok := llmClient.(*models.Client); ok {
+				// 使用流式响应
+				fmt.Print("\nAI：")
+				tokenCh, errCh := ollamaClient.ChatStream(callCtx, msgs)
+
+				var fullResponse strings.Builder
+				for token := range tokenCh {
+					fmt.Print(token)
+					fullResponse.WriteString(token)
+				}
+
+				// 检查错误
+				if err := <-errCh; err != nil {
+					log.Fatal(err)
+				}
+
+				assistantText = fullResponse.String()
+				fmt.Println() // 换行
+			} else {
+				// 非流式响应（DeepSeek等）
+				assistantText, err = llmClient.Chat(callCtx, msgs)
+				if err != nil {
+					log.Fatal(err)
+				}
+				fmt.Println("\nAI：", assistantText)
 			}
 		}
 
@@ -671,21 +695,47 @@ func main() {
 					Content: toolFeedbackPrompt,
 				})
 
-				// 再次调用LLM生成最终回复
+				// 再次调用LLM生成最终回复（使用流式响应）
 				callCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.Timeout)*time.Second)
-				assistantText, err = llmClient.Chat(callCtx, msgs)
-				cancel()
-				if err != nil {
-					log.Fatal(err)
+
+				if ollamaClient, ok := llmClient.(*models.Client); ok {
+					// 使用流式响应
+					fmt.Print("\nAI：")
+					tokenCh, errCh := ollamaClient.ChatStream(callCtx, msgs)
+
+					var fullResponse strings.Builder
+					for token := range tokenCh {
+						fmt.Print(token)
+						fullResponse.WriteString(token)
+					}
+
+					// 检查错误
+					if err := <-errCh; err != nil {
+						cancel()
+						log.Fatal(err)
+					}
+
+					assistantText = fullResponse.String()
+					fmt.Println() // 换行
+				} else {
+					// 非流式响应
+					assistantText, err = llmClient.Chat(callCtx, msgs)
+					if err != nil {
+						cancel()
+						log.Fatal(err)
+					}
+					fmt.Println("\nAI：", assistantText)
 				}
+				cancel()
 
 				if cfg.Debug {
 					blue("基于工具结果生成最终回复\n")
 				}
 			}
+		} else {
+			// 没有工具调用，直接显示回复（已在上面流式输出）
+			// 不需要额外操作
 		}
-
-		fmt.Println("\nAI：", assistantText)
 
 		// 5) 自主学习：反思提取 -> 清洗校验 -> 写 SQLite/Qdrant（提取前不要 short.Add，避免重复上下文）
 		extractorModelToUse := cfg.Memory.ExtractorModel
