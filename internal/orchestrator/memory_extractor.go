@@ -34,72 +34,54 @@ func ExtractMemories(
 	assistantText string,
 	debug bool,
 	extractorModel string,
+	includeHistory bool,
 ) ([]memory.ExtractedMemory, error) {
-	sys := `你是"记忆提取器"。只输出严格 JSON，不要任何额外文字。
+	sys := `你是记忆提取器，只输出 JSON。
 
-目标：从对话中提取值得长期保存的信息。
+提取标准：只提取稳定、长期有效、明确表达的信息（不会频繁变化、不依赖时间点、可用于个性化）
 
-【提取标准 - STABLE 原则】
-只提取满足以下所有条件的信息：
-1. Stable（稳定）：不会频繁变化
-2. Timeless（时间无关）：不依赖特定时间点
-3. Actionable（可操作）：未来可用于个性化
-4. Broad（广泛适用）：在多个场景有用
-5. Long-lasting（持久）：预期长期有效
-6. Explicit（明确）：用户明确表达的
+类型：
+- identity: 身份（姓名、昵称、职业、年龄、技能）
+- preference: 偏好（喜好、风格、习惯）
+- goal: 目标（学习、职业、项目目标）
+- context: 上下文（工具、环境、约束）
+- knowledge: 知识（专业技能、经验）
 
-【记忆类型】
-- identity: 身份信息（姓名、职业、年龄、技能等）
-- preference: 偏好习惯（喜好、风格、习惯、活动）
-- goal: 目标计划（学习目标、职业目标、项目目标）
-- context: 上下文信息（工具、环境、约束、事实）
-- knowledge: 知识技能（专业技能、经验、专长）
+归属(owner)：用户信息->"user"；助手设定->"agent"；不要把助手对用户的推测当成事实
 
-【归属规则 (owner)】
-- 从【用户输入】中提取的"关于用户自己的信息" -> owner="user"
-- 从【用户输入】中提取的"关于助手/Agent的设定" -> owner="agent"
-- 从【助手回复】中提取的"关于助手自己的设定" -> owner="agent"
-- 不要把【助手回复】里对用户的"推测/迎合/复述"当成用户事实（除非用户本轮明确确认）
+不提取：临时状态、一次性事件、推测信息、敏感信息（密码/身份证/手机/邮箱/地址）
 
-【不要提取】
-❌ 临时状态："今天很累"、"刚吃了饭"
-❌ 一次性事件："昨天开会"、"刚到公司"
-❌ 推测信息："可能喜欢"、"应该是"
-❌ 敏感信息：密码、身份证、精确住址、手机号、邮箱
+注意：
+- "叫我X"、"以后叫我X"、"你可以叫我X" 都表示用户的名字/昵称
+- 提取时使用 key="name" 或 key="nickname"
 
-【输出格式】
-{
-  "memories": [
-    {
-      "type": "identity",
-      "key": "name",
-      "value": "张三",
-      "confidence": 1.0,
-      "also_vector": true,
-      "owner": "user",
-      "text": "用户名叫张三"
-    }
-  ]
-}
+【重要】只从"本轮对话"中提取，不要从"历史对话"中提取（历史对话仅供理解上下文）
 
-要求：
-- key 必须是英文小写，用下划线分隔
-- confidence 范围 0~1，不确定就不要输出
-- also_vector=true 表示写入向量数据库作为可检索语义记忆
-- text 字段可选，用于提供更多上下文
+输出格式：
+{"memories":[{"type":"identity","key":"name","value":"张三","confidence":1.0,"also_vector":true,"owner":"user","text":"用户名叫张三"}]}
 
-只输出 JSON，不要任何额外文字。`
+要求：key用英文小写+下划线；confidence为0~1；also_vector=true表示写入向量库；text可选`
 
-	prompt := fmt.Sprintf(`最近对话（供参考，带标签 [USER]/[ASSISTANT] ）：
+	var prompt string
+	if includeHistory && recentTurns != "" {
+		// 包含历史上下文（可能导致重复提取，但有助于理解）
+		prompt = fmt.Sprintf(`历史对话（仅供理解上下文，不要从中提取）：
 %s
 
-本轮用户输入([USER])：
-%s
-
-本轮助手回复([ASSISTANT])：
-%s
+===== 本轮对话（只从这里提取记忆）=====
+用户: %s
+助手: %s
+==========================================
 
 请输出 JSON：{"memories":[...]}（只输出JSON）`, recentTurns, userText, assistantText)
+	} else {
+		// 不包含历史上下文（避免重复提取，推荐）
+		prompt = fmt.Sprintf(`本轮对话：
+用户: %s
+助手: %s
+
+请输出 JSON：{"memories":[...]}（只输出JSON）`, userText, assistantText)
+	}
 
 	msgs := []models.ChatMessage{
 		{Role: "system", Content: sys},

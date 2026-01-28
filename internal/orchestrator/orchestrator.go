@@ -80,11 +80,22 @@ func (o *Orchestrator) ProcessMessage(
 		return agent.Output{}, err
 	}
 
-	// 5. 提取并存储记忆
-	if err := o.extractAndStoreMemories(ctx, userID, conversationHistory, userText, output.Response); err != nil {
-		if o.cfg.Debug {
-			fmt.Printf("提取记忆失败: %v\n", err)
-		}
+	// 5. 异步提取并存储记忆（智能触发）
+	if o.shouldExtractMemory(userText, output.Response) {
+		go func() {
+			// 使用 background context 避免父 context 取消影响异步任务
+			// 设置超时防止 goroutine 泄漏
+			bgCtx, cancel := context.WithTimeout(context.Background(), time.Duration(o.cfg.Timeout)*time.Second)
+			defer cancel()
+
+			if err := o.extractAndStoreMemories(bgCtx, userID, conversationHistory, userText, output.Response); err != nil {
+				if o.cfg.Debug {
+					fmt.Printf("异步提取记忆失败: %v\n", err)
+				}
+			}
+		}()
+	} else if o.cfg.Debug {
+		fmt.Printf("跳过记忆提取：未触发条件\n")
 	}
 
 	return output, nil
@@ -203,6 +214,7 @@ func (o *Orchestrator) extractAndStoreMemories(
 		assistantText,
 		o.cfg.Debug,
 		extractorModel,
+		o.cfg.Memory.IncludeHistoryContext,
 	)
 	if err != nil {
 		return err
@@ -296,6 +308,156 @@ func (o *Orchestrator) storeSemanticMemories(
 		fmt.Printf("成功写入 Qdrant 语义记忆\n")
 	}
 	return nil
+}
+
+// shouldExtractMemory 判断是否需要提取记忆
+func (o *Orchestrator) shouldExtractMemory(userText, assistantText string) bool {
+	// 如果未启用智能触发，总是提取
+	if !o.cfg.Memory.EnableSmartTrigger {
+		return true
+	}
+
+	// 预过滤：过滤简单应答
+	if o.isSimpleResponse(userText) {
+		return false
+	}
+
+	// 根据配置的触发方法选择策略
+	switch o.cfg.Memory.TriggerMethod {
+	case "keyword":
+		return o.shouldExtractByKeyword(userText, assistantText)
+	case "llm":
+		return o.shouldExtractByLLM(userText, assistantText)
+	case "conservative":
+		return o.shouldExtractConservative(userText, assistantText)
+	default:
+		// 默认使用保守策略
+		return o.shouldExtractConservative(userText, assistantText)
+	}
+}
+
+// isSimpleResponse 检查是否为简单应答
+func (o *Orchestrator) isSimpleResponse(userText string) bool {
+	simpleResponses := []string{
+		"好的", "好", "嗯", "哦", "啊", "呃",
+		"谢谢", "谢了", "多谢", "感谢",
+		"ok", "okay", "yes", "no", "yeah",
+		"哈哈", "呵呵", "嘿嘿", "嘻嘻",
+		"👌", "👍", "😊", "😄",
+	}
+	userLower := strings.TrimSpace(strings.ToLower(userText))
+	for _, resp := range simpleResponses {
+		if userLower == resp {
+			return true
+		}
+	}
+	return false
+}
+
+// shouldExtractByKeyword 基于关键词判断
+func (o *Orchestrator) shouldExtractByKeyword(userText, assistantText string) bool {
+	// 检查消息长度
+	minLen := o.cfg.Memory.MinMessageLength
+	if len(userText) < minLen && len(assistantText) < minLen*2 {
+		return false
+	}
+
+	// 检查记忆关键词
+	memoryKeywords := []string{
+		// 身份相关
+		"我叫", "我是", "叫我", "称呼我", "我的名字", "我的职业", "我做", "我在",
+		"以后叫我", "可以叫我", "你可以叫我", "你叫我",
+		// 偏好相关
+		"我喜欢", "我不喜欢", "我讨厌", "我偏好", "我习惯",
+		"我常用", "我经常", "我一般", "我通常", "我倾向",
+		// 目标相关
+		"我想", "我要", "我计划", "我打算", "我的目标",
+		"我希望", "我准备", "我会",
+		// 技能/知识相关
+		"我会", "我懂", "我了解", "我熟悉", "我擅长",
+		"我学过", "我用过", "我做过", "我掌握",
+		// 上下文相关
+		"我用", "我的环境", "我的工具", "我的项目",
+	}
+
+	combined := userText + " " + assistantText
+	for _, kw := range memoryKeywords {
+		if strings.Contains(combined, kw) {
+			if o.cfg.Debug {
+				fmt.Printf("触发记忆提取：检测到关键词 '%s'\n", kw)
+			}
+			return true
+		}
+	}
+
+	return false
+}
+
+// shouldExtractByLLM 使用 LLM 分类器判断
+func (o *Orchestrator) shouldExtractByLLM(userText, assistantText string) bool {
+	// 检查消息长度（太短直接跳过，节省 API 调用）
+	if len(userText) < 5 && len(assistantText) < 10 {
+		return false
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// 构建分类提示词
+	prompt := fmt.Sprintf(`判断以下对话是否包含值得长期保存的个人信息。
+
+个人信息包括：
+- 身份：姓名、昵称、职业、年龄、技能
+- 偏好：喜好、风格、习惯
+- 目标：学习目标、职业目标、项目计划
+- 知识：专业技能、经验、专长
+- 上下文：使用的工具、环境、约束
+
+对话：
+用户: %s
+助手: %s
+
+只回答 YES 或 NO。
+回答：`, userText, assistantText)
+
+	msgs := []models.ChatMessage{
+		{Role: "user", Content: prompt},
+	}
+
+	// 使用配置的分类器模型
+	classifierModel := o.cfg.Memory.ClassifierModel
+	response, err := o.llmClient.Chat(ctx, msgs, classifierModel)
+	if err != nil {
+		if o.cfg.Debug {
+			fmt.Printf("LLM 分类器调用失败: %v，回退到保守策略\n", err)
+		}
+		// 失败时回退到保守策略
+		return o.shouldExtractConservative(userText, assistantText)
+	}
+
+	response = strings.TrimSpace(strings.ToUpper(response))
+	shouldExtract := strings.Contains(response, "YES")
+
+	if o.cfg.Debug {
+		fmt.Printf("LLM 分类器判断: %s -> %v\n", response, shouldExtract)
+	}
+
+	return shouldExtract
+}
+
+// shouldExtractConservative 保守策略（信任提取器的判断）
+func (o *Orchestrator) shouldExtractConservative(userText, assistantText string) bool {
+	minLen := o.cfg.Memory.MinMessageLength
+
+	// 消息足够长就提取，让提取器自己判断是否有价值
+	if len(userText) >= minLen || len(assistantText) >= minLen*2 {
+		if o.cfg.Debug {
+			fmt.Printf("触发记忆提取：消息长度满足条件（保守策略）\n")
+		}
+		return true
+	}
+
+	return false
 }
 
 func truncate(s string, max int) string {

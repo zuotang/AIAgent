@@ -48,8 +48,13 @@ type DatabaseConfig struct {
 
 // MemoryConfig 记忆配置
 type MemoryConfig struct {
-	WindowSize      int    `yaml:"window_size"`       // 短期记忆窗口大小
-	ExtractorModel  string `yaml:"extractor_model"`   // 记忆提取模型
+	WindowSize            int    `yaml:"window_size"`              // 短期记忆窗口大小
+	ExtractorModel        string `yaml:"extractor_model"`          // 记忆提取模型
+	EnableSmartTrigger    bool   `yaml:"enable_smart_trigger"`     // 启用智能触发
+	TriggerMethod         string `yaml:"trigger_method"`           // 触发方法: keyword, llm, conservative
+	ClassifierModel       string `yaml:"classifier_model"`         // 分类器模型（用于 llm 方法）
+	MinMessageLength      int    `yaml:"min_message_length"`       // 最小消息长度
+	IncludeHistoryContext bool   `yaml:"include_history_context"`  // 提取时包含历史上下文
 }
 
 // Load 从文件加载配置
@@ -105,6 +110,17 @@ func (c *Config) setDefaults() {
 	if c.Memory.WindowSize == 0 {
 		c.Memory.WindowSize = 8
 	}
+	if c.Memory.TriggerMethod == "" {
+		c.Memory.TriggerMethod = "conservative"
+	}
+	if c.Memory.ClassifierModel == "" {
+		c.Memory.ClassifierModel = "qwen2.5:0.5b"
+	}
+	if c.Memory.MinMessageLength == 0 {
+		c.Memory.MinMessageLength = 10
+	}
+	// 默认不包含历史上下文（避免重复提取）
+	// c.Memory.IncludeHistoryContext 默认为 false
 	if c.Timeout == 0 {
 		c.Timeout = 60
 	}

@@ -28,8 +28,13 @@ database:
 
 # 记忆配置
 memory:
-  window_size: 8  # 短期记忆窗口大小（对话轮数）
+  window_size: 5  # 短期记忆窗口大小（对话轮数）
   extractor_model: ""  # 记忆提取模型（留空则使用 chat_model）
+  enable_smart_trigger: true  # 启用智能触发（节省 70-80% token）
+  trigger_method: "conservative"  # 触发方法: keyword, llm, conservative
+  classifier_model: "qwen2.5:0.5b"  # LLM 分类器模型（仅 llm 方法使用）
+  min_message_length: 10      # 最小消息长度
+  include_history_context: false  # 提取时包含历史上下文（false 避免重复提取）
 
 # 调试模式
 debug: false
