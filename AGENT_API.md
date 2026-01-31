@@ -44,6 +44,8 @@
 {
   "id": 1,
   "name": "翻译助手",
+  "gender": "female",
+  "age": 25,
   "description": "专业的翻译助手",
   "prompt_id": 2,
   "prompt": {
@@ -63,6 +65,8 @@
 **字段说明**：
 - `id`: Agent ID（自动生成）
 - `name`: Agent 名称（唯一）
+- `gender`: 性别
+- `age`: 年龄
 - `description`: 描述
 - `prompt_id`: 关联的提示词 ID
 - `prompt`: 关联的提示词对象（查询时自动加载）
@@ -188,6 +192,8 @@ Content-Type: application/json
 
 {
   "name": "翻译助手",
+  "gender": "female",
+  "age": 25,
   "description": "专业的翻译助手",
   "prompt_id": 2,
   "avatar": "https://example.com/avatar.png",
@@ -201,6 +207,8 @@ Content-Type: application/json
 {
   "id": 1,
   "name": "翻译助手",
+  "gender": "female",
+  "age": 25,
   "description": "专业的翻译助手",
   "prompt_id": 2,
   "prompt": {
@@ -290,10 +298,14 @@ PUT /api/agents/1
 Content-Type: application/json
 
 {
+  "gender": "male",
+  "age": 30,
   "description": "更新后的描述",
   "is_active": false
 }
 ```
+
+**说明**：所有字段都是可选的，只更新提供的字段。
 
 #### 6. 删除 Agent
 

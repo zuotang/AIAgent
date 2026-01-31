@@ -57,19 +57,20 @@ func (c *Client) Chat(ctx context.Context, msgs []ChatMessage, model ...string) 
 	if len(model) > 0 && model[0] != "" {
 		useModel = model[0]
 	}
-	
+
 	reqBody := map[string]any{
 		"model":    useModel,
 		"messages": msgs,
 		"stream":   false,
 	}
 	b, _ := json.Marshal(reqBody)
-	
+
 	// 调试输出：发送的请求
 	if c.Debug {
-		fmt.Printf("[DEBUG] 发送到 Ollama API 的请求：\n%s\n", string(b))
+
+		fmt.Printf("\033[35m[DEBUG] 发送到 Ollama API 的请求：\n%s\033[0m\n", string(b))
 	}
-	
+
 	req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/api/chat", bytes.NewReader(b))
 	if err != nil {
 		return "", err
@@ -93,12 +94,12 @@ func (c *Client) Chat(ctx context.Context, msgs []ChatMessage, model ...string) 
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return "", err
 	}
-	
+
 	// 调试输出：收到的响应
 	if c.Debug {
 		fmt.Printf("[DEBUG] 从 Ollama API 收到的响应：\n%s\n", out.Message.Content)
 	}
-	
+
 	return out.Message.Content, nil
 }
 
@@ -126,7 +127,8 @@ func (c *Client) ChatStream(ctx context.Context, msgs []ChatMessage, model ...st
 
 		// 调试输出
 		if c.Debug {
-			fmt.Printf("[DEBUG] 发送流式请求到 Ollama API (model: %s)\n", useModel)
+			// 使用红色输出调试信息
+			fmt.Printf("\033[31m[DEBUG] 发送流式请求到 Ollama API (model: %s, body: %s)\033[0m\n", useModel, string(b))
 		}
 
 		req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/api/chat", bytes.NewReader(b))

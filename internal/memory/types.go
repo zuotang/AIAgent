@@ -99,6 +99,8 @@ func (Prompt) TableName() string {
 type Agent struct {
 	ID          uint           `gorm:"primaryKey;autoIncrement" json:"id"`
 	Name        string         `gorm:"type:text;not null;uniqueIndex" json:"name"`
+	Gender      string         `gorm:"type:text" json:"gender"`                       // 性别
+	Age         int            `gorm:"type:integer" json:"age"`                       // 年龄
 	Description string         `gorm:"type:text" json:"description"`
 	PromptID    uint           `gorm:"type:integer;not null" json:"prompt_id"`
 	Prompt      *Prompt        `gorm:"foreignKey:PromptID" json:"prompt,omitempty"` // 关联的提示词

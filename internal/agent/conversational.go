@@ -101,7 +101,8 @@ func (a *ConversationalAgent) RunStream(ctx context.Context, input Input, callba
 
 	// 将消息序列化为字符串，存储到 LLMInput
 	llmInput, _ := json.MarshalIndent(msgs, "", "  ")
-
+	//输出msgs
+	println(msgs)
 	// 调用LLM生成响应（流式）
 	response, err := a.generateResponseStream(ctx, msgs, callback)
 	if err != nil {
@@ -153,7 +154,7 @@ func (a *ConversationalAgent) RunStream(ctx context.Context, input Input, callba
 func (a *ConversationalAgent) buildPrompt(input Input) string {
 	var sb strings.Builder
 
-	sb.WriteString("请基于以下信息回应用户（以陪聊为主）：\n\n")
+	sb.WriteString("请基于以下信息回应用户：\n\n")
 
 	if input.Conversation != "" {
 		sb.WriteString("【短期对话窗口】（用于保持上下文）\n")
@@ -170,10 +171,7 @@ func (a *ConversationalAgent) buildPrompt(input Input) string {
 	sb.WriteString(input.Message)
 	sb.WriteString("\n\n")
 
-	sb.WriteString("输出要求：\n")
-	sb.WriteString("- 先接情绪，再自然回应\n")
-	sb.WriteString("- 给轻量建议/小选择题（不长篇科普）\n")
-	sb.WriteString("- 如需追问，最多 2 个关键问题")
+	sb.WriteString("- 给轻量建议/小选择题（不长篇科普),如果需选择以~#开头，格式：~#1、选择(20字以内)\n~#2、选择\n")
 
 	return sb.String()
 }

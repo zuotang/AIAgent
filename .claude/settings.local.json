@@ -12,7 +12,8 @@
       "Bash(ls:*)",
       "Bash(git mv:*)",
       "Bash(timeout 3 go run:*)",
-      "Bash(timeout 3 ./test_chat.exe:*)"
+      "Bash(timeout 3 ./test_chat.exe:*)",
+      "Bash(grep:*)"
     ]
   }
 }

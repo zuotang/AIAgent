@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -27,7 +28,7 @@ func NewChatService(orch orchestrator.Orchestrator) *ChatService {
 type ChatRequest struct {
 	Message string `json:"message" validate:"required"`
 	UserID  string `json:"user_id" validate:"required"`
-	AgentID *uint  `json:"agent_id"` // 可选的 Agent ID
+	AgentID uint   `json:"agent_id"` // 可选的 Agent ID，默认使用 ID=1 的 Agent
 }
 
 // DebugInfo 调试信息
@@ -41,6 +42,9 @@ type ChatResponse struct {
 	DebugInfo DebugInfo `json:"debug_info"` // 调试信息
 }
 
+// 以下是之前硬编码的提示词，现已移至数据库
+// 可以通过 Prompt 表和 Agent 表进行管理
+/*
 const systemPrompt = `你是一个陪聊女孩
 
 原则：
@@ -48,6 +52,10 @@ const systemPrompt = `你是一个陪聊女孩
 - 你会参考"结构化长期记忆(SQLite)"和"语义长期记忆(Qdrant)"来保持一致性与个性化，但不要把记忆内容原样泄露给用户（除非用户要求你总结）。
 - 【重要】长期记忆里：agent 表示你（assistant），user 表示用户本人，严禁混用。
 
+`
+*/
+
+/*
 【工具能力】
 你可以使用以下工具来帮助用户：
 
@@ -57,18 +65,39 @@ const systemPrompt = `你是一个陪聊女孩
    - 示例：
      * 用户："计算 (5+3)*4" → 回复：TOOL_CALL: calculator("(5+3)*4")
    - 支持的操作：+, -, *, /, ^(幂), sqrt(平方根), abs(绝对值)
- 
+
 
 【重要】当需要使用工具时：
 1. 直接输出 TOOL_CALL: tool_name("参数")，不要添加其他文字
 2. 工具执行后，你会收到结果，然后基于结果给用户自然的回复
-3. 只在确实需要时使用工具，不要滥用`
+3. 只在确实需要时使用工具，不要滥用
+*/
 
 // HandleChat 处理聊天请求
 func (s *ChatService) HandleChat(c echo.Context) error {
 	var req ChatRequest
 	if err := c.Bind(&req); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request"})
+		// 添加详细的错误信息
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error":   "Invalid request",
+			"message": err.Error(),
+			"details": "Failed to parse JSON request body",
+		})
+	}
+
+	// 打印接收到的请求信息用于调试
+	println("=== Chat Request Debug ===")
+	println("Message:", req.Message)
+	println("UserID:", req.UserID)
+	println("AgentID:", req.AgentID)
+	println("========================")
+
+	// 验证必填字段
+	if req.Message == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error":   "Validation failed",
+			"message": "message field is required",
+		})
 	}
 
 	// 如果用户ID为空，使用默认值
@@ -77,19 +106,60 @@ func (s *ChatService) HandleChat(c echo.Context) error {
 		userID = "api_user"
 	}
 
-	// 获取系统提示词
-	prompt := systemPrompt
-	if req.AgentID != nil {
-		// 如果指定了 AgentID，获取对应的 Agent 和提示词
-		agent, err := s.orch.GetStore().GetAgent(c.Request().Context(), *req.AgentID)
-		if err == nil && agent.Prompt != nil {
-			prompt = agent.Prompt.Content
-		}
+	// 如果未指定 AgentID，使用默认 Agent (ID=1)
+	agentID := req.AgentID
+	if agentID == 0 {
+		agentID = 1
+		println("No agent_id provided, using default agent ID: 1")
 	}
 
-	// 创建短期记忆窗口
-	windowMem := memory.NewWindowMemory(10) // 使用默认窗口大小
-	println("创建短期记忆窗口")
+	// 从数据库获取 Agent 和提示词
+	println("Loading agent with ID:", agentID)
+	agent, err := s.orch.GetStore().GetAgent(c.Request().Context(), agentID)
+	if err != nil {
+		println("Failed to get agent:", err.Error())
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error":   "Agent not found",
+			"message": fmt.Sprintf("Failed to load agent with ID: %d", agentID),
+			"details": err.Error(),
+		})
+	}
+
+	// 获取提示词
+	var prompt string
+	if agent.Prompt != nil {
+		println("Using agent prompt, length:", len(agent.Prompt.Content))
+		prompt = agent.Prompt.Content
+	} else {
+		println("Agent has no prompt")
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error":   "Agent configuration error",
+			"message": "Agent does not have a prompt configured",
+		})
+	}
+
+	// 创建短期记忆窗口并加载历史消息
+	windowMem := memory.NewWindowMemory(10) // 最多保留10轮对话
+	println("加载历史聊天记录作为上下文")
+
+	// 从数据库加载最近的聊天记录
+	historyMessages, err := s.orch.GetChatHistory(c.Request().Context(), userID, 20, 0) // 加载最近20条消息
+	if err != nil {
+		println("Failed to load chat history:", err.Error())
+		// 加载失败不影响继续，只是没有上下文
+	} else {
+		// 将历史消息按时间正序排列（数据库返回的是倒序）
+		for i := len(historyMessages) - 1; i >= 0; i-- {
+			msg := historyMessages[i]
+			// 找到成对的 user 和 assistant 消息
+			if i > 0 && msg.Role == "assistant" && historyMessages[i-1].Role == "user" {
+				windowMem.Add(historyMessages[i-1].Content, msg.Content)
+				i-- // 跳过已处理的 user 消息
+			}
+		}
+		println("已加载", windowMem.Size(), "轮历史对话")
+	}
+
 	// 处理消息
 	output, err := s.orch.ProcessMessage(context.Background(), userID, req.Message, windowMem.String(), prompt)
 	if err != nil {
@@ -111,12 +181,26 @@ func (s *ChatService) HandleChat(c echo.Context) error {
 func (s *ChatService) HandleChatStream(c echo.Context) error {
 	var req ChatRequest
 	if err := c.Bind(&req); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request: " + err.Error()})
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error":   "Invalid request",
+			"message": err.Error(),
+			"details": "Failed to parse JSON request body",
+		})
 	}
+
+	// 打印接收到的请求信息用于调试
+	println("=== Chat Stream Request Debug ===")
+	println("Message:", req.Message)
+	println("UserID:", req.UserID)
+	println("AgentID:", req.AgentID)
+	println("================================")
 
 	// 验证请求
 	if req.Message == "" {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Message is required"})
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error":   "Validation failed",
+			"message": "message field is required",
+		})
 	}
 
 	// 设置用户ID
@@ -124,12 +208,64 @@ func (s *ChatService) HandleChatStream(c echo.Context) error {
 	if userID == "" {
 		userID = "api_user"
 	}
+
+	// 如果未指定 AgentID，使用默认 Agent (ID=1)
+	agentID := req.AgentID
+	if agentID == 0 {
+		agentID = 1
+		println("No agent_id provided, using default agent ID: 1")
+	}
+
+	// 从数据库获取 Agent 和提示词
+	println("Loading agent with ID:", agentID)
+	agent, err := s.orch.GetStore().GetAgent(c.Request().Context(), agentID)
+	if err != nil {
+		println("Failed to get agent:", err.Error())
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error":   "Agent not found",
+			"message": fmt.Sprintf("Failed to load agent with ID: %d", agentID),
+			"details": err.Error(),
+		})
+	}
+
+	// 获取提示词
+	var prompt string
+	if agent.Prompt != nil {
+		println("Using agent prompt, length:", len(agent.Prompt.Content))
+		prompt = agent.Prompt.Content
+	} else {
+		println("Agent has no prompt")
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error":   "Agent configuration error",
+			"message": "Agent does not have a prompt configured",
+		})
+	}
+
 	println("设置响应头")
 	// 设置响应头
 	c.Response().Header().Set("Content-Type", "text/event-stream")
 	c.Response().Header().Set("Cache-Control", "no-cache")
 	c.Response().Header().Set("Connection", "keep-alive")
 	c.Response().WriteHeader(http.StatusOK)
+
+	// 加载历史消息作为上下文
+	println("加载历史聊天记录作为上下文")
+	windowMem := memory.NewWindowMemory(10)
+	historyMessages, err := s.orch.GetChatHistory(c.Request().Context(), userID, 20, 0)
+	if err != nil {
+		println("Failed to load chat history:", err.Error())
+	} else {
+		// 将历史消息按时间正序排列并填充到窗口记忆
+		for i := len(historyMessages) - 1; i >= 0; i-- {
+			msg := historyMessages[i]
+			if i > 0 && msg.Role == "assistant" && historyMessages[i-1].Role == "user" {
+				windowMem.Add(historyMessages[i-1].Content, msg.Content)
+				i--
+			}
+		}
+		println("已加载", windowMem.Size(), "轮历史对话")
+	}
+
 	println("流式回调")
 	// 流式回调
 	streamCallback := func(chunk string) error {
@@ -141,7 +277,7 @@ func (s *ChatService) HandleChatStream(c echo.Context) error {
 	}
 	println("处理消息")
 	// 处理消息（流式）
-	_, err := s.orch.ProcessMessageStream(c.Request().Context(), userID, req.Message, "", systemPrompt, streamCallback)
+	_, err = s.orch.ProcessMessageStream(c.Request().Context(), userID, req.Message, windowMem.String(), prompt, streamCallback)
 	if err != nil {
 		println("处理消息失败")
 		println(err.Error())
