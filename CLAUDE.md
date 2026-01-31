@@ -154,11 +154,69 @@ To add a new tool:
 
 ## Dependencies
 
-- **modernc.org/sqlite**: Pure Go SQLite driver
+- **gorm.io/gorm**: ORM framework for database operations
+- **gorm.io/driver/sqlite**: GORM SQLite driver
 - **gopkg.in/yaml.v3**: YAML configuration parsing
 - **github.com/labstack/echo/v4**: HTTP framework (API server only)
 - **Standard library**: Extensive use of net/http, encoding/json, context
 
+## Database Layer (GORM)
+
+The project uses GORM as the ORM framework for all SQLite operations.
+
+### Models
+
+**Memory Model** (`internal/memory/types.go`):
+- Stores structured memories with type safety
+- Supports soft delete (DeletedAt field)
+- Automatic timestamps (UpdatedAt)
+- Composite unique index on (user_id, mtype, mkey, owner)
+- Access tracking (access_count, last_accessed_at)
+
+**ChatMessage Model**:
+- Stores conversation history
+- Indexed by user_id and session_id
+- Automatic creation timestamp
+
+### Key Features
+
+1. **Auto Migration**: Tables and indexes are automatically created/updated
+2. **Type Safety**: Compile-time type checking for all database operations
+3. **Soft Delete**: Records are marked as deleted, not physically removed
+4. **Transaction Support**: Automatic transaction management for batch operations
+5. **Context Support**: All operations support context for cancellation and timeout
+
+### Common Operations
+
+```go
+// Create
+s.db.WithContext(ctx).Create(&memory)
+
+// Query with conditions
+s.db.WithContext(ctx).Where("user_id = ?", userID).Find(&memories)
+
+// Update
+s.db.WithContext(ctx).Model(&Memory{}).Where("id = ?", id).Updates(updates)
+
+// Soft delete
+s.db.WithContext(ctx).Delete(&memory)
+
+// Transaction
+s.db.Transaction(func(tx *gorm.DB) error {
+    // operations
+    return nil
+})
+```
+
+### Debug Mode
+
+Enable SQL logging:
+```go
+store.SetDebug(true)  // Logs all SQL queries
+```
+
 ## Testing
 
 Tests are located alongside source files with `_test.go` suffix. Example: `internal/tools/calculator_test.go`, `internal/utils/tokens_test.go`.
+
+For database testing, GORM provides in-memory SQLite support.

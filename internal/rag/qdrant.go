@@ -49,19 +49,19 @@ type Doc struct {
 }
 
 type QdrantStore struct {
-	BaseURL    string
-	APIKey     string // Qdrant API Key（可选）
-	Collection string
-	Embedder   func(context.Context, string) ([]float32, error)
-	HTTP       *http.Client
+	BaseURL            string
+	APIKey             string // Qdrant API Key（可选）
+	Collection         string // 默认为 memories，用于存储所有数据
+	Embedder           func(context.Context, string) ([]float32, error)
+	HTTP               *http.Client
 }
 
 func NewQdrantStore(qdrantURL, apiKey, collection string, embedder func(context.Context, string) ([]float32, error)) *QdrantStore {
 	return &QdrantStore{
-		BaseURL:    qdrantURL,
-		APIKey:     apiKey,
-		Collection: collection,
-		Embedder:   embedder,
+		BaseURL:            qdrantURL,
+		APIKey:             apiKey,
+		Collection:         collection,
+		Embedder:           embedder,
 		HTTP: &http.Client{
 			Timeout: 60 * time.Second,
 		},
@@ -70,10 +70,14 @@ func NewQdrantStore(qdrantURL, apiKey, collection string, embedder func(context.
 
 // EnsureCollection：你第一次启动时会自动创建 collection（向量维度由第一次 embedding 决定）
 func (s *QdrantStore) EnsureCollection(ctx context.Context, dim int) error {
-	// GET collection 判断是否存在
+	// 确保集合存在
+	return s.ensureCollection(ctx, s.Collection, dim)
+}
+
+func (s *QdrantStore) ensureCollection(ctx context.Context, collection string, dim int) error {
 	// 检查集合是否存在
 	resp, err := s.doWithRetry(ctx, func() (*http.Request, error) {
-		return http.NewRequestWithContext(ctx, "GET", s.BaseURL+"/collections/"+s.Collection, nil)
+		return http.NewRequestWithContext(ctx, "GET", s.BaseURL+"/collections/"+collection, nil)
 	}, 3) // 最多重试3次
 	if err != nil {
 		return err
@@ -92,7 +96,7 @@ func (s *QdrantStore) EnsureCollection(ctx context.Context, dim int) error {
 	}
 	b, _ := json.Marshal(body)
 	resp2, err := s.doWithRetry(ctx, func() (*http.Request, error) {
-		req, err := http.NewRequestWithContext(ctx, "PUT", s.BaseURL+"/collections/"+s.Collection, bytes.NewReader(b))
+		req, err := http.NewRequestWithContext(ctx, "PUT", s.BaseURL+"/collections/"+collection, bytes.NewReader(b))
 		if err != nil {
 			return nil, err
 		}
@@ -110,16 +114,21 @@ func (s *QdrantStore) EnsureCollection(ctx context.Context, dim int) error {
 }
 
 func (s *QdrantStore) SimilaritySearch(ctx context.Context, userID, query string, topK int) ([]Doc, error) {
+	// 从集合搜索
+	return s.SimilaritySearchFromCollection(ctx, userID, query, topK, s.Collection)
+}
+
+func (s *QdrantStore) SimilaritySearchFromCollection(ctx context.Context, userID, query string, topK int, collection string) ([]Doc, error) {
 	vec, err := s.Embedder(ctx, query)
 	if err != nil {
 		return nil, err
 	}
 
-	// Qdrant search payload filter by user_id
 	body := map[string]any{
 		"vector":       vec,
 		"limit":        topK,
 		"with_payload": true,
+		"with_vectors": false,
 		"filter": map[string]any{
 			"must": []any{
 				map[string]any{
@@ -130,7 +139,7 @@ func (s *QdrantStore) SimilaritySearch(ctx context.Context, userID, query string
 		},
 	}
 	b, _ := json.Marshal(body)
-	url := s.BaseURL + "/collections/" + s.Collection + "/points/search"
+	url := s.BaseURL + "/collections/" + collection + "/points/search"
 	resp, err := s.doWithRetry(ctx, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(b))
 		if err != nil {
@@ -138,7 +147,7 @@ func (s *QdrantStore) SimilaritySearch(ctx context.Context, userID, query string
 		}
 		req.Header.Set("Content-Type", "application/json")
 		return req, nil
-	}, 3) // 最多重试3次
+	}, 3)
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +177,7 @@ func (s *QdrantStore) SimilaritySearch(ctx context.Context, userID, query string
 	return docs, nil
 }
 
-func (s *QdrantStore) UpsertTexts(ctx context.Context, userID string, texts []string) error {
+func (s *QdrantStore) UpsertTexts(ctx context.Context, userID string, texts []string, fileName string) error {
 	for _, t := range texts {
 		if t == "" {
 			continue
@@ -180,38 +189,66 @@ func (s *QdrantStore) UpsertTexts(ctx context.Context, userID string, texts []st
 
 		pointID := randomID()
 
+		payload := map[string]any{
+			"user_id":   userID,
+			"content":   t,
+			"file_name": fileName,
+			"timestamp": time.Now().Unix(),
+			"type":      "knowledge",
+		}
+
 		body := map[string]any{
 			"points": []any{
 				map[string]any{
-					"id":     pointID,
-					"vector": vec,
-					"payload": map[string]any{
-						"user_id": userID,
-						"text":    t,
-						"ts":      time.Now().Format(time.RFC3339),
-					},
+					"id":      pointID,
+					"vector":  vec,
+					"payload": payload,
 				},
 			},
 		}
 
-		b, _ := json.Marshal(body)
-		url := s.BaseURL + "/collections/" + s.Collection + "/points?wait=true"
-		resp, err := s.doWithRetry(ctx, func() (*http.Request, error) {
-			req, err := http.NewRequestWithContext(ctx, "PUT", url, bytes.NewReader(b))
-			if err != nil {
-				return nil, err
-			}
-			req.Header.Set("Content-Type", "application/json")
-			return req, nil
-		}, 3) // 最多重试3次
-		if err != nil {
+		if err := s.UpsertPointToCollection(ctx, body, s.Collection); err != nil {
 			return err
 		}
-		_ = resp.Body.Close()
-		if resp.StatusCode >= 300 {
-			return fmt.Errorf("qdrant upsert http %d", resp.StatusCode)
-		}
 	}
+	return nil
+}
+
+// UpsertPoint 向 Qdrant 存储单个点，支持自定义元数据
+func (s *QdrantStore) UpsertPoint(ctx context.Context, body map[string]any) error {
+	return s.UpsertPointToCollection(ctx, body, s.Collection)
+}
+
+func (s *QdrantStore) UpsertPointToCollection(ctx context.Context, body map[string]any, collection string) error {
+	resp, err := s.doWithRetry(ctx, func() (*http.Request, error) {
+		url := fmt.Sprintf("%s/collections/%s/points", s.BaseURL, collection)
+		data, err := json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewBuffer(data))
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+		if s.APIKey != "" {
+			req.Header.Set("api-key", s.APIKey)
+		}
+
+		return req, nil
+	}, 3)
+
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("upsert point failed with status code: %d", resp.StatusCode)
+	}
+
 	return nil
 }
 
@@ -219,6 +256,67 @@ func randomID() string {
 	var b [16]byte
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
+}
+
+// ListFiles 获取用户的知识库文件列表
+func (s *QdrantStore) ListFiles(ctx context.Context, userID string) ([]string, error) {
+	// 使用 Qdrant 的 scroll API 来获取所有匹配的点
+	body := map[string]any{
+		"filter": map[string]any{
+			"must": []any{
+				map[string]any{
+					"key":   "user_id",
+					"match": map[string]any{"value": userID},
+				},
+			},
+		},
+		"limit":        100,
+		"with_payload": true,
+	}
+	b, _ := json.Marshal(body)
+	url := s.BaseURL + "/collections/" + s.Collection + "/points/scroll"
+	resp, err := s.doWithRetry(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(b))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		return req, nil
+	}, 3)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("scroll points http %d", resp.StatusCode)
+	}
+
+	var out struct {
+		Result struct {
+			Points []struct {
+				Payload map[string]any `json:"payload"`
+			} `json:"points"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+
+	// 提取唯一的文件路径
+	fileMap := make(map[string]bool)
+	for _, r := range out.Result.Points {
+		if source, ok := r.Payload["source"].(string); ok && source != "" {
+			fileMap[source] = true
+		}
+	}
+
+	// 将 map 转换为 slice
+	files := make([]string, 0, len(fileMap))
+	for file := range fileMap {
+		files = append(files, file)
+	}
+
+	return files, nil
 }
 
 // 方便：从 models.Client 直接构造 store

@@ -37,23 +37,22 @@ func ExtractMemories(
 	includeHistory bool,
 ) ([]memory.ExtractedMemory, error) {
 	sys := `你是记忆提取器，只输出 JSON。
-
-提取标准：只提取稳定、长期有效、明确表达的信息（不会频繁变化、不依赖时间点、可用于个性化）
-
+只提取稳定、长期有效、明确表达的信息
 类型：
 - identity: 身份（姓名、昵称、职业、年龄、技能）
 - preference: 偏好（喜好、风格、习惯）
 - goal: 目标（学习、职业、项目目标）
 - context: 上下文（工具、环境、约束）
 - knowledge: 知识（专业技能、经验）
+各类型提取的 key 需遵循统一规范，key 名称不能包含 user、agent 字样：
+- identity：name (姓名 / 昵称，通用)、career (职业)、age (年龄)、skill (技能)
+- preference：hobby (喜好)、style (风格)、habit (习惯)
+- goal：study_goal (学习目标)、career_goal (职业目标)、project_goal (项目目标)
+- context：tool (工具)、env (环境)、constraint (约束)
+- knowledge：prof_skill (专业技能)、experience (经验)
+归属 (owner)：用户自主明确表达的信息→"user"；助手自身的设定信息→"agent"；仅提取 owner 为 user 的信息，不要提取 agent 信息，严禁把助手对用户的推测、猜测当成事实提取。
 
-归属(owner)：用户信息->"user"；助手设定->"agent"；不要把助手对用户的推测当成事实
-
-不提取：临时状态、一次性事件、推测信息、敏感信息（密码/身份证/手机/邮箱/地址）
-
-注意：
-- "叫我X"、"以后叫我X"、"你可以叫我X" 都表示用户的名字/昵称
-- 提取时使用 key="name" 或 key="nickname"
+不提取：临时状态、一次性事件、推测信息
 
 【重要】只从"本轮对话"中提取，不要从"历史对话"中提取（历史对话仅供理解上下文）
 

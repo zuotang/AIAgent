@@ -3,32 +3,73 @@ package memory
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
+
+	// 导入 modernc.org/sqlite 驱动（纯 Go 实现，无需 CGO）
 	_ "modernc.org/sqlite"
 )
 
 type Store struct {
-	db *sql.DB
+	db *gorm.DB
 }
 
+// New 创建新的 Store 实例
 func New(dbPath string) (*Store, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	// 首先使用 database/sql 打开连接（使用 modernc.org/sqlite）
+	sqlDB, err := sql.Open("sqlite", dbPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
+
+	// 配置 GORM
+	config := &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent), // 生产环境使用 Silent
+	}
+
+	// 使用已有的 sql.DB 创建 GORM 实例
+	db, err := gorm.Open(sqlite.Dialector{
+		Conn: sqlDB,
+	}, config)
+	if err != nil {
+		sqlDB.Close()
+		return nil, fmt.Errorf("failed to initialize GORM: %w", err)
+	}
+
 	s := &Store{db: db}
+
+	// 自动迁移表结构
 	if err := s.init(); err != nil {
-		_ = db.Close()
 		return nil, err
 	}
+
 	return s, nil
 }
 
-func (s *Store) Close() error { return s.db.Close() }
+// Close 关闭数据库连接
+func (s *Store) Close() error {
+	sqlDB, err := s.db.DB()
+	if err != nil {
+		return err
+	}
+	return sqlDB.Close()
+}
 
+// init 初始化数据库表
 func (s *Store) init() error {
-	ddl := `
+	// 检查表是否存在
+	var tableCount int64
+	s.db.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memories'").Scan(&tableCount)
+
+	if tableCount == 0 {
+		// 表不存在，手动创建
+		ddl := `
 CREATE TABLE IF NOT EXISTS memories (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id TEXT NOT NULL,
@@ -40,197 +81,531 @@ CREATE TABLE IF NOT EXISTS memories (
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   access_count INTEGER NOT NULL DEFAULT 0,
   last_accessed_at DATETIME,
-  UNIQUE(user_id, mtype, mkey, owner)
+  deleted_at DATETIME
 );
 
+CREATE TABLE IF NOT EXISTS chat_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  session_id TEXT
+);
+
+CREATE TABLE IF NOT EXISTS prompts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  content TEXT NOT NULL,
+  description TEXT,
+  category TEXT DEFAULT 'assistant',
+  is_default BOOLEAN DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted_at DATETIME
+);
+
+CREATE TABLE IF NOT EXISTS agents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  description TEXT,
+  prompt_id INTEGER NOT NULL,
+  avatar TEXT,
+  config TEXT,
+  is_active BOOLEAN DEFAULT 1,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted_at DATETIME,
+  FOREIGN KEY (prompt_id) REFERENCES prompts(id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_unique ON memories(user_id, mtype, mkey, owner);
+CREATE INDEX IF NOT EXISTS idx_chat_history_user_id ON chat_history(user_id);
+CREATE INDEX IF NOT EXISTS idx_chat_history_session_id ON chat_history(session_id);
+CREATE INDEX IF NOT EXISTS idx_memories_deleted_at ON memories(deleted_at);
+CREATE INDEX IF NOT EXISTS idx_prompts_category ON prompts(category);
+CREATE INDEX IF NOT EXISTS idx_agents_prompt_id ON agents(prompt_id);
+CREATE INDEX IF NOT EXISTS idx_agents_is_active ON agents(is_active);
 `
-	_, err := s.db.Exec(ddl)
-	if err != nil {
-		return err
-	}
+		if err := s.db.Exec(ddl).Error; err != nil {
+			return fmt.Errorf("failed to create tables: %w", err)
+		}
 
-	// 添加新字段（如果表已存在但没有这些字段）
-	// SQLite的ALTER TABLE ADD COLUMN是幂等的，如果列已存在会报错但不影响
-	s.db.Exec(`ALTER TABLE memories ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0`)
-	s.db.Exec(`ALTER TABLE memories ADD COLUMN last_accessed_at DATETIME`)
+		// 插入默认提示词
+		if err := s.insertDefaultPrompts(); err != nil {
+			return fmt.Errorf("failed to insert default prompts: %w", err)
+		}
+	} else {
+		// 表已存在，添加可能缺失的列（兼容旧版本）
+		s.db.Exec(`ALTER TABLE memories ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0`)
+		s.db.Exec(`ALTER TABLE memories ADD COLUMN last_accessed_at DATETIME`)
+		s.db.Exec(`ALTER TABLE memories ADD COLUMN deleted_at DATETIME`)
+
+		// 确保索引存在
+		s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_unique ON memories(user_id, mtype, mkey, owner)`)
+		s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_chat_history_user_id ON chat_history(user_id)`)
+		s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_chat_history_session_id ON chat_history(session_id)`)
+		s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_memories_deleted_at ON memories(deleted_at)`)
+
+		// 检查并创建新表
+		var promptTableCount int64
+		s.db.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='prompts'").Scan(&promptTableCount)
+		if promptTableCount == 0 {
+			s.db.Exec(`
+CREATE TABLE IF NOT EXISTS prompts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  content TEXT NOT NULL,
+  description TEXT,
+  category TEXT DEFAULT 'assistant',
+  is_default BOOLEAN DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted_at DATETIME
+);
+CREATE INDEX IF NOT EXISTS idx_prompts_category ON prompts(category);
+`)
+			s.insertDefaultPrompts()
+		}
+
+		var agentTableCount int64
+		s.db.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agents'").Scan(&agentTableCount)
+		if agentTableCount == 0 {
+			s.db.Exec(`
+CREATE TABLE IF NOT EXISTS agents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  description TEXT,
+  prompt_id INTEGER NOT NULL,
+  avatar TEXT,
+  config TEXT,
+  is_active BOOLEAN DEFAULT 1,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted_at DATETIME,
+  FOREIGN KEY (prompt_id) REFERENCES prompts(id)
+);
+CREATE INDEX IF NOT EXISTS idx_agents_prompt_id ON agents(prompt_id);
+CREATE INDEX IF NOT EXISTS idx_agents_is_active ON agents(is_active);
+`)
+		}
+	}
 
 	return nil
 }
 
-// UpsertExtractedMemories：把“记忆提取器”输出写入 SQLite（可覆盖更新）
-func (s *Store) UpsertExtractedMemories(ctx context.Context, userID string, ms []ExtractedMemory) error {
-	for _, m := range ms {
-		if m.Confidence < 0.65 {
-			continue
-		}
-		if m.Type == "" || m.Key == "" || m.Value == "" {
-			continue
-		}
-		// 确保owner字段有值
-		owner := m.Owner
-		if owner == "" {
-			owner = "user"
-		}
-		_, err := s.db.ExecContext(ctx, `
-INSERT INTO memories(user_id,mtype,mkey,mvalue,confidence,owner,updated_at)
-VALUES(?,?,?,?,?,?,?)
-ON CONFLICT(user_id,mtype,mkey,owner) DO UPDATE SET
- mvalue=excluded.mvalue,
- confidence=excluded.confidence,
- owner=excluded.owner,
- updated_at=excluded.updated_at
-`, userID, m.Type, m.Key, m.Value, m.Confidence, owner, time.Now().Format(time.RFC3339))
-		if err != nil {
-			return err
+// insertDefaultPrompts 插入默认提示词
+func (s *Store) insertDefaultPrompts() error {
+	defaultPrompts := []Prompt{
+		{
+			Name:        "默认助手",
+			Content:     "你是一个友好、专业的 AI 助手。你的目标是帮助用户解决问题，提供准确的信息和建议。",
+			Description: "通用 AI 助手提示词",
+			Category:    "assistant",
+			IsDefault:   true,
+		},
+		{
+			Name:        "翻译助手",
+			Content:     "你是一个专业的翻译助手。请准确、流畅地翻译用户提供的文本，保持原文的语气和风格。",
+			Description: "专业翻译提示词",
+			Category:    "translator",
+			IsDefault:   false,
+		},
+		{
+			Name:        "代码助手",
+			Content:     "你是一个专业的编程助手。你精通多种编程语言，能够帮助用户编写、调试和优化代码。请提供清晰的代码示例和解释。",
+			Description: "编程辅助提示词",
+			Category:    "coder",
+			IsDefault:   false,
+		},
+	}
+
+	for _, prompt := range defaultPrompts {
+		// 检查是否已存在
+		var count int64
+		s.db.Model(&Prompt{}).Where("name = ?", prompt.Name).Count(&count)
+		if count == 0 {
+			if err := s.db.Create(&prompt).Error; err != nil {
+				return err
+			}
 		}
 	}
+
 	return nil
 }
 
-// RenderStructuredMemory：把 SQLite 里的结构化记忆渲染成一段文本，塞给 system/prompt 用
+// SetDebug 设置调试模式
+func (s *Store) SetDebug(debug bool) {
+	if debug {
+		s.db.Logger = logger.Default.LogMode(logger.Info)
+	} else {
+		s.db.Logger = logger.Default.LogMode(logger.Silent)
+	}
+}
+
+// SaveChatMessage 保存聊天消息
+func (s *Store) SaveChatMessage(ctx context.Context, userID, role, content, sessionID string) error {
+	msg := &ChatMessage{
+		UserID:    userID,
+		Role:      role,
+		Content:   content,
+		SessionID: sessionID,
+	}
+
+	return s.db.WithContext(ctx).Create(msg).Error
+}
+
+// GetChatHistory 获取用户的聊天记录
+func (s *Store) GetChatHistory(ctx context.Context, userID string, limit, offset int) ([]ChatMessage, error) {
+	var messages []ChatMessage
+
+	err := s.db.WithContext(ctx).
+		Where("user_id = ?", userID).
+		Order("created_at DESC").
+		Limit(limit).
+		Offset(offset).
+		Find(&messages).Error
+
+	return messages, err
+}
+
+// GetChatSessions 获取用户的聊天会话列表
+func (s *Store) GetChatSessions(ctx context.Context, userID string) ([]ChatSession, error) {
+	var sessions []ChatSession
+
+	err := s.db.WithContext(ctx).
+		Model(&ChatMessage{}).
+		Select("session_id, MAX(content) as latest_message, MAX(created_at) as last_activity").
+		Where("user_id = ? AND session_id != ''", userID).
+		Group("session_id").
+		Order("last_activity DESC").
+		Scan(&sessions).Error
+
+	return sessions, err
+}
+
+// UpsertExtractedMemories 插入或更新提取的记忆
+func (s *Store) UpsertExtractedMemories(ctx context.Context, userID string, memories []ExtractedMemory) error {
+	if len(memories) == 0 {
+		return nil
+	}
+
+	// 使用事务批量处理
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		now := time.Now()
+
+		for _, m := range memories {
+			memory := &Memory{
+				UserID:     userID,
+				Type:       m.Type,
+				Key:        m.Key,
+				Value:      m.Value,
+				Confidence: m.Confidence,
+				Owner:      m.Owner,
+				UpdatedAt:  now,
+			}
+
+			// 使用 GORM 的 Clauses 实现 UPSERT
+			// 如果记录存在（基于唯一索引），则更新；否则插入
+			result := tx.Where("user_id = ? AND mtype = ? AND mkey = ? AND owner = ?",
+				userID, m.Type, m.Key, m.Owner).
+				Assign(map[string]interface{}{
+					"mvalue":     m.Value,
+					"confidence": m.Confidence,
+					"updated_at": now,
+				}).
+				FirstOrCreate(memory)
+
+			if result.Error != nil {
+				return result.Error
+			}
+		}
+
+		return nil
+	})
+}
+
+// RenderStructuredMemory 渲染结构化记忆为文本
 func (s *Store) RenderStructuredMemory(ctx context.Context, userID string, limit int) (string, error) {
-	rows, err := s.db.QueryContext(ctx, `
-SELECT mtype,mkey,mvalue,confidence,owner
-FROM memories
-WHERE user_id=?
-ORDER BY
-  CASE mtype
-    WHEN 'identity' THEN 1
-    WHEN 'preference' THEN 2
-    WHEN 'goal' THEN 3
-    WHEN 'knowledge' THEN 4
-    WHEN 'context' THEN 5
-    ELSE 9
-  END,
-  confidence DESC,
-  updated_at DESC
-LIMIT ?`, userID, limit)
+	var memories []Memory
+
+	err := s.db.WithContext(ctx).
+		Where("user_id = ?", userID).
+		Order("updated_at DESC").
+		Limit(limit).
+		Find(&memories).Error
+
 	if err != nil {
 		return "", err
 	}
-	defer rows.Close()
 
-	out := "【结构化长期记忆(SQLite)】\n"
-	var accessedMemories []struct {
-		mtype string
-		mkey  string
-		owner string
-	}
-
-	for rows.Next() {
-		var t, k, v, owner string
-		var c float64
-		if err := rows.Scan(&t, &k, &v, &c, &owner); err != nil {
-			return "", err
-		}
-		out += "- " + owner + ": " + t + "." + k + " = " + v + " (conf=" + format2(c) + ")\n"
-
-		// 记录访问的记忆
-		accessedMemories = append(accessedMemories, struct {
-			mtype string
-			mkey  string
-			owner string
-		}{t, k, owner})
-	}
-
-	// 异步更新访问统计
-	if len(accessedMemories) > 0 {
-		go s.updateAccessStats(context.Background(), userID, accessedMemories)
-	}
-
-	return out, nil
-}
-
-func format2(f float64) string {
-	// 小工具：避免 fmt 依赖；你也可以直接用 fmt.Sprintf("%.2f", f)
-	// 这里简单粗暴：
-	if f >= 1 {
-		return "1.00"
-	}
-	if f <= 0 {
-		return "0.00"
-	}
-	// 保留两位
-	n := int(f*100 + 0.5)
-	return string('0'+(n/100)) + "." + twoDigits(n%100)
-}
-func twoDigits(n int) string {
-	return string('0'+(n/10)) + string('0'+(n%10))
-}
-
-// updateAccessStats 异步更新访问统计
-func (s *Store) updateAccessStats(ctx context.Context, userID string, memories []struct {
-	mtype string
-	mkey  string
-	owner string
-}) {
 	if len(memories) == 0 {
-		return
+		return "(暂无长期记忆)", nil
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return
-	}
-	defer tx.Rollback()
+	// 按 owner 分组
+	userMems := []Memory{}
+	agentMems := []Memory{}
 
-	stmt, err := tx.PrepareContext(ctx, `
-		UPDATE memories
-		SET access_count = access_count + 1,
-		    last_accessed_at = ?
-		WHERE user_id = ? AND mtype = ? AND mkey = ? AND owner = ?
-	`)
-	if err != nil {
-		return
-	}
-	defer stmt.Close()
-
-	now := time.Now().Format(time.RFC3339)
 	for _, m := range memories {
-		stmt.ExecContext(ctx, now, userID, m.mtype, m.mkey, m.owner)
+		if m.Owner == "user" {
+			userMems = append(userMems, m)
+		} else {
+			agentMems = append(agentMems, m)
+		}
 	}
 
-	tx.Commit()
+	var sb strings.Builder
+
+	// 用户记忆
+	if len(userMems) > 0 {
+		sb.WriteString("【用户信息】\n")
+		for _, m := range userMems {
+			sb.WriteString(fmt.Sprintf("- %s: %s\n", m.Key, m.Value))
+		}
+	}
+
+	// Agent 记忆
+	if len(agentMems) > 0 {
+		if sb.Len() > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString("【助手记忆】\n")
+		for _, m := range agentMems {
+			sb.WriteString(fmt.Sprintf("- %s: %s\n", m.Key, m.Value))
+		}
+	}
+
+	return sb.String(), nil
 }
 
-// GetTopAccessedMemories 获取最常访问的记忆
-func (s *Store) GetTopAccessedMemories(ctx context.Context, userID string, limit int) ([]MemoryStats, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT mtype, mkey, mvalue, owner, confidence, access_count, last_accessed_at, updated_at
-		FROM memories
-		WHERE user_id = ? AND access_count > 0
-		ORDER BY access_count DESC, last_accessed_at DESC
-		LIMIT ?
-	`, userID, limit)
+// GetTopAccessedMemories 获取访问次数最多的记忆
+func (s *Store) GetTopAccessedMemories(ctx context.Context, userID string, limit int) ([]MemoryStat, error) {
+	var stats []MemoryStat
+
+	err := s.db.WithContext(ctx).
+		Model(&Memory{}).
+		Select("owner, mtype as type, mkey as key, mvalue as value, confidence, access_count, "+
+			"datetime(last_accessed_at) as last_accessed, datetime(updated_at) as updated_at").
+		Where("user_id = ? AND access_count > 0", userID).
+		Order("access_count DESC, updated_at DESC").
+		Limit(limit).
+		Scan(&stats).Error
+
+	return stats, err
+}
+
+// IncrementAccessCount 增加记忆的访问次数
+func (s *Store) IncrementAccessCount(ctx context.Context, userID string, mtype, mkey, owner string) error {
+	now := time.Now()
+
+	return s.db.WithContext(ctx).
+		Model(&Memory{}).
+		Where("user_id = ? AND mtype = ? AND mkey = ? AND owner = ?", userID, mtype, mkey, owner).
+		Updates(map[string]interface{}{
+			"access_count":      gorm.Expr("access_count + 1"),
+			"last_accessed_at": now,
+		}).Error
+}
+
+// LoadProfile 加载配置文件（保留兼容性）
+func (s *Store) LoadProfile(profileType, key string) (*Profile, error) {
+	// 这个方法在当前代码中似乎没有被使用，保留空实现以保持兼容性
+	return &Profile{
+		Agent: make(map[string]any),
+		User:  make(map[string]any),
+	}, nil
+}
+
+// SaveProfile 保存配置文件（保留兼容性）
+func (s *Store) SaveProfile(profile *Profile) error {
+	// 这个方法在当前代码中似乎没有被使用，保留空实现以保持兼容性
+	return nil
+}
+
+// GetMemoriesByType 根据类型获取记忆
+func (s *Store) GetMemoriesByType(ctx context.Context, userID, mtype string) ([]Memory, error) {
+	var memories []Memory
+
+	err := s.db.WithContext(ctx).
+		Where("user_id = ? AND mtype = ?", userID, mtype).
+		Order("updated_at DESC").
+		Find(&memories).Error
+
+	return memories, err
+}
+
+// DeleteMemory 删除记忆（软删除）
+func (s *Store) DeleteMemory(ctx context.Context, userID string, mtype, mkey, owner string) error {
+	return s.db.WithContext(ctx).
+		Where("user_id = ? AND mtype = ? AND mkey = ? AND owner = ?", userID, mtype, mkey, owner).
+		Delete(&Memory{}).Error
+}
+
+// GetMemoryCount 获取记忆总数
+func (s *Store) GetMemoryCount(ctx context.Context, userID string) (int64, error) {
+	var count int64
+
+	err := s.db.WithContext(ctx).
+		Model(&Memory{}).
+		Where("user_id = ?", userID).
+		Count(&count).Error
+
+	return count, err
+}
+
+// ExportMemories 导出所有记忆为 JSON
+func (s *Store) ExportMemories(ctx context.Context, userID string) (string, error) {
+	var memories []Memory
+
+	err := s.db.WithContext(ctx).
+		Where("user_id = ?", userID).
+		Order("updated_at DESC").
+		Find(&memories).Error
+
+	if err != nil {
+		return "", err
+	}
+
+	data, err := json.MarshalIndent(memories, "", "  ")
+	if err != nil {
+		return "", err
+	}
+
+	return string(data), nil
+}
+
+// ==================== Prompt CRUD ====================
+
+// CreatePrompt 创建提示词
+func (s *Store) CreatePrompt(ctx context.Context, prompt *Prompt) error {
+	return s.db.WithContext(ctx).Create(prompt).Error
+}
+
+// GetPrompt 获取单个提示词
+func (s *Store) GetPrompt(ctx context.Context, id uint) (*Prompt, error) {
+	var prompt Prompt
+	err := s.db.WithContext(ctx).First(&prompt, id).Error
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var stats []MemoryStats
-	for rows.Next() {
-		var s MemoryStats
-		var lastAccessed sql.NullString
-		if err := rows.Scan(&s.Type, &s.Key, &s.Value, &s.Owner, &s.Confidence, &s.AccessCount, &lastAccessed, &s.UpdatedAt); err != nil {
-			continue
-		}
-		if lastAccessed.Valid {
-			s.LastAccessed = lastAccessed.String
-		}
-		stats = append(stats, s)
-	}
-
-	return stats, nil
+	return &prompt, nil
 }
 
-// MemoryStats 记忆统计信息
-type MemoryStats struct {
-	Type         string
-	Key          string
-	Value        string
-	Owner        string
-	Confidence   float64
-	AccessCount  int
-	LastAccessed string
-	UpdatedAt    string
+// GetPromptByName 根据名称获取提示词
+func (s *Store) GetPromptByName(ctx context.Context, name string) (*Prompt, error) {
+	var prompt Prompt
+	err := s.db.WithContext(ctx).Where("name = ?", name).First(&prompt).Error
+	if err != nil {
+		return nil, err
+	}
+	return &prompt, nil
+}
+
+// ListPrompts 列出所有提示词
+func (s *Store) ListPrompts(ctx context.Context, category string, limit, offset int) ([]Prompt, error) {
+	var prompts []Prompt
+	query := s.db.WithContext(ctx)
+
+	if category != "" {
+		query = query.Where("category = ?", category)
+	}
+
+	err := query.Order("created_at DESC").
+		Limit(limit).
+		Offset(offset).
+		Find(&prompts).Error
+
+	return prompts, err
+}
+
+// UpdatePrompt 更新提示词
+func (s *Store) UpdatePrompt(ctx context.Context, id uint, updates map[string]interface{}) error {
+	return s.db.WithContext(ctx).
+		Model(&Prompt{}).
+		Where("id = ?", id).
+		Updates(updates).Error
+}
+
+// DeletePrompt 删除提示词（软删除）
+func (s *Store) DeletePrompt(ctx context.Context, id uint) error {
+	return s.db.WithContext(ctx).Delete(&Prompt{}, id).Error
+}
+
+// GetDefaultPrompt 获取默认提示词
+func (s *Store) GetDefaultPrompt(ctx context.Context) (*Prompt, error) {
+	var prompt Prompt
+	err := s.db.WithContext(ctx).Where("is_default = ?", true).First(&prompt).Error
+	if err != nil {
+		return nil, err
+	}
+	return &prompt, nil
+}
+
+// ==================== Agent CRUD ====================
+
+// CreateAgent 创建 Agent
+func (s *Store) CreateAgent(ctx context.Context, agent *Agent) error {
+	return s.db.WithContext(ctx).Create(agent).Error
+}
+
+// GetAgent 获取单个 Agent
+func (s *Store) GetAgent(ctx context.Context, id uint) (*Agent, error) {
+	var agent Agent
+	err := s.db.WithContext(ctx).Preload("Prompt").First(&agent, id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &agent, nil
+}
+
+// GetAgentByName 根据名称获取 Agent
+func (s *Store) GetAgentByName(ctx context.Context, name string) (*Agent, error) {
+	var agent Agent
+	err := s.db.WithContext(ctx).Preload("Prompt").Where("name = ?", name).First(&agent).Error
+	if err != nil {
+		return nil, err
+	}
+	return &agent, nil
+}
+
+// ListAgents 列出所有 Agent
+func (s *Store) ListAgents(ctx context.Context, isActive *bool, limit, offset int) ([]Agent, error) {
+	var agents []Agent
+	query := s.db.WithContext(ctx).Preload("Prompt")
+
+	if isActive != nil {
+		query = query.Where("is_active = ?", *isActive)
+	}
+
+	err := query.Order("created_at DESC").
+		Limit(limit).
+		Offset(offset).
+		Find(&agents).Error
+
+	return agents, err
+}
+
+// UpdateAgent 更新 Agent
+func (s *Store) UpdateAgent(ctx context.Context, id uint, updates map[string]interface{}) error {
+	return s.db.WithContext(ctx).
+		Model(&Agent{}).
+		Where("id = ?", id).
+		Updates(updates).Error
+}
+
+// DeleteAgent 删除 Agent（软删除）
+func (s *Store) DeleteAgent(ctx context.Context, id uint) error {
+	return s.db.WithContext(ctx).Delete(&Agent{}, id).Error
+}
+
+// GetActiveAgents 获取所有激活的 Agent
+func (s *Store) GetActiveAgents(ctx context.Context) ([]Agent, error) {
+	var agents []Agent
+	err := s.db.WithContext(ctx).
+		Preload("Prompt").
+		Where("is_active = ?", true).
+		Order("created_at DESC").
+		Find(&agents).Error
+	return agents, err
 }

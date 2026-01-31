@@ -1,6 +1,167 @@
 # 配置更新说明
 
-## 新增功能
+## 最新更新 (2026-01-31)
+
+### 配置系统重大重构
+
+本次更新对配置系统进行了重大重构，将 `embedding`、`extractor` 和 `classifier` 从原有配置中独立出来，使配置更加灵活和模块化。
+
+#### 1. Embedding 配置独立化
+
+**变更前**：
+```yaml
+llm:
+  ollama:
+    embed_model: nomic-embed-text
+```
+
+**变更后**：
+```yaml
+embedding:
+  provider: ollama
+  base_url: http://127.0.0.1:11434
+  model: nomic-embed-text
+  api_key: ""
+  batch_size: 10
+  dimensions: 0
+```
+
+**优势**：
+- 可以使用独立的 embedding 服务（如 OpenAI embeddings）
+- 支持不同的 base_url 和 API key
+- 增加了批量处理和维度配置
+
+#### 2. 记忆提取器配置独立化
+
+**变更前**：
+```yaml
+memory:
+  extractor_model: ""
+```
+
+**变更后**：
+```yaml
+extractor:
+  provider: ollama
+  base_url: http://127.0.0.1:11434
+  model: ""
+  api_key: ""
+  temperature: 0.1
+  max_retries: 3
+```
+
+**优势**：
+- 可以使用不同的服务提供商
+- 独立的 base_url 配置
+- 支持温度和重试次数配置
+
+#### 3. 分类器配置独立化
+
+**变更前**：
+```yaml
+memory:
+  classifier_model: "qwen2.5:0.5b"
+```
+
+**变更后**：
+```yaml
+classifier:
+  provider: ollama
+  base_url: http://127.0.0.1:11434
+  model: qwen2.5:0.5b
+  api_key: ""
+  temperature: 0.0
+  timeout: 10
+```
+
+#### 4. 新增性能配置节
+
+```yaml
+performance:
+  max_concurrent_requests: 10
+  request_timeout: 120
+  enable_cache: true
+  cache_ttl: 3600
+```
+
+#### 5. 记忆配置增强
+
+新增配置项：
+```yaml
+memory:
+  min_confidence: 0.65  # 最小置信度阈值
+  max_memories_per_extraction: 20  # 每次提取的最大记忆数
+```
+
+#### 6. API 服务配置增强
+
+新增配置项：
+```yaml
+services:
+  api:
+    host: 0.0.0.0  # 监听地址
+    cors_enabled: true  # CORS 支持
+```
+
+### 使用场景示例
+
+#### 场景 1: 全本地部署
+```yaml
+base:
+  provider: ollama
+
+embedding:
+  provider: ollama
+  base_url: http://127.0.0.1:11434
+  model: nomic-embed-text
+
+extractor:
+  provider: ollama
+  model: gemma3:4b  # 使用小模型
+
+classifier:
+  provider: ollama
+  model: qwen2.5:0.5b
+```
+
+#### 场景 2: 混合云服务
+```yaml
+base:
+  provider: deepseek
+
+llm:
+  deepseek:
+    api_key: "your-key"
+
+embedding:
+  provider: ollama  # 本地 embedding
+  base_url: http://127.0.0.1:11434
+  model: nomic-embed-text
+
+extractor:
+  provider: ollama  # 本地提取器
+  model: qwen2.5:7b
+```
+
+#### 场景 3: 使用专业 Embedding 服务
+```yaml
+embedding:
+  provider: openai
+  base_url: https://api.openai.com/v1
+  model: text-embedding-3-small
+  api_key: "your-openai-key"
+  dimensions: 1536
+```
+
+### 迁移指南
+
+详细的迁移指南请参考 `CONFIG_MIGRATION.md`
+
+---
+
+## 历史更新
+
+### 新增功能 (之前版本)
 
 ### 1. Qdrant API Key 支持
 

@@ -8,6 +8,8 @@ import (
 type Agent interface {
 	// Run 执行Agent任务
 	Run(ctx context.Context, input Input) (Output, error)
+	// RunStream 流式执行Agent任务
+	RunStream(ctx context.Context, input Input, callback func(string) error) (Output, error)
 }
 
 // Input Agent的输入
@@ -27,6 +29,7 @@ type Output struct {
 	ToolCalls    []ToolCall          // 工具调用记录
 	ThoughtTrace []string            // 思考过程
 	Metadata     map[string]interface{} // 元数据
+	LLMInput     string              // 发送给LLM的输入
 }
 
 // ToolCall 工具调用记录

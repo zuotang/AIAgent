@@ -91,13 +91,56 @@ Agent-Langchain 是一个基于 Go 语言开发的智能代理系统，结合了
   - 显示 Ollama API 的请求和响应
   - 显示记忆提取和存储的详细信息
 
+### 5. 知识库录入工具
+
+- **文件录入**：支持单个文件和目录批量录入
+- **文档分块**：自动将文档分割成合适大小的块
+- **向量嵌入**：使用 Ollama 生成文本向量
+- **向量存储**：将向量存储到 Qdrant
+- **并行处理**：多协程并行处理文档分块
+- **错误重试**：自动重试失败的操作
+- **缓存机制**：避免重复处理相同内容
+
 ## 配置与使用
 
-### 命令行参数
+### 聊天程序命令行参数
 
 | 参数 | 描述 | 默认值 |
 |------|------|--------|
 | `-ollama` | Ollama API 地址 | http://localhost:11434 |
+
+### 知识库录入工具命令行参数
+
+| 参数 | 描述 | 默认值 |
+|------|------|--------|
+| `--file` | 单个文件路径 | - |
+| `--dir` | 目录路径 | - |
+| `--ollama-url` | Ollama 服务地址 | http://localhost:11434 |
+| `--qdrant-url` | Qdrant 服务地址 | http://localhost:6333 |
+| `--qdrant-collection` | Qdrant 集合名称 | documents |
+| `--chunk-size` | 文档分块大小 | 1000 |
+| `--chunk-overlap` | 分块重叠大小 | 200 |
+| `--user-id` | 用户 ID | default |
+
+### 知识库录入工具使用示例
+
+#### 录入单个文件
+
+```bash
+./ingest.exe --file test_file.txt
+```
+
+#### 录入目录
+
+```bash
+./ingest.exe --dir test_dir
+```
+
+#### 自定义配置
+
+```bash
+./ingest.exe --dir documents --ollama-url http://localhost:11434 --qdrant-url http://localhost:6333 --chunk-size 1500 --chunk-overlap 300
+```
 | `-qdrant` | Qdrant API 地址 | http://localhost:6334 |
 | `-debug` | 启用调试输出 | false |
 | `-model` | 聊天模型名称 | llama3 |
