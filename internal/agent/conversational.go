@@ -171,7 +171,8 @@ func (a *ConversationalAgent) buildPrompt(input Input) string {
 	sb.WriteString(input.Message)
 	sb.WriteString("\n\n")
 
-	sb.WriteString("- 给轻量建议/小选择题（不长篇科普),如果需选择以~#开头，格式：~#1、选择(20字以内)\n~#2、选择\n")
+	//sb.WriteString("必须先回答用户问题，再给用户提供选择。")
+	//sb.WriteString("- 给出3到5个选择以~#开头，格式：~#1、选择(10字以内)\n~#2、选择\n")
 
 	return sb.String()
 }
@@ -182,9 +183,11 @@ func (a *ConversationalAgent) generateResponse(ctx context.Context, msgs []model
 	defer cancel()
 
 	// 尝试使用流式响应
-	if ollamaClient, ok := a.llmClient.(*models.Client); ok {
+	if streamClient, ok := a.llmClient.(interface {
+		ChatStream(ctx context.Context, msgs []models.ChatMessage, model ...string) (<-chan string, <-chan error)
+	}); ok {
 		fmt.Print("\nAI：")
-		tokenCh, errCh := ollamaClient.ChatStream(callCtx, msgs)
+		tokenCh, errCh := streamClient.ChatStream(callCtx, msgs)
 
 		var fullResponse strings.Builder
 		for token := range tokenCh {
@@ -216,8 +219,10 @@ func (a *ConversationalAgent) generateResponseStream(ctx context.Context, msgs [
 	defer cancel()
 
 	// 尝试使用流式响应
-	if ollamaClient, ok := a.llmClient.(*models.Client); ok {
-		tokenCh, errCh := ollamaClient.ChatStream(callCtx, msgs)
+	if streamClient, ok := a.llmClient.(interface {
+		ChatStream(ctx context.Context, msgs []models.ChatMessage, model ...string) (<-chan string, <-chan error)
+	}); ok {
+		tokenCh, errCh := streamClient.ChatStream(callCtx, msgs)
 
 		var fullResponse strings.Builder
 		for token := range tokenCh {

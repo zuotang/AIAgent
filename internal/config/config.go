@@ -22,16 +22,17 @@ type Config struct {
 
 // BaseConfig 基本配置
 type BaseConfig struct {
-	Provider string `yaml:"provider"` // ollama 或 deepseek
+	Provider string `yaml:"provider"` // ollama, deepseek 或 anthropic
 	Debug    bool   `yaml:"debug"`    // 调试模式
 	Timeout  int    `yaml:"timeout"`  // 超时时间（秒）
 }
 
 // LLMConfig LLM 配置
 type LLMConfig struct {
-	Ollama   OllamaConfig   `yaml:"ollama"`
-	DeepSeek DeepSeekConfig `yaml:"deepseek"`
-	RAG      RAGConfig      `yaml:"rag"`
+	Ollama    OllamaConfig    `yaml:"ollama"`
+	DeepSeek  DeepSeekConfig  `yaml:"deepseek"`
+	Anthropic AnthropicConfig `yaml:"anthropic"`
+	RAG       RAGConfig       `yaml:"rag"`
 }
 
 // StorageConfig 存储配置
@@ -111,6 +112,13 @@ type DeepSeekConfig struct {
 	ChatModel string `yaml:"chat_model"`
 }
 
+// AnthropicConfig Anthropic 配置
+type AnthropicConfig struct {
+	BaseURL   string `yaml:"base_url"`
+	APIKey    string `yaml:"api_key"`
+	ChatModel string `yaml:"chat_model"`
+}
+
 // QdrantConfig Qdrant 配置
 type QdrantConfig struct {
 	BaseURL    string `yaml:"base_url"`
@@ -180,6 +188,12 @@ func (c *Config) setDefaults() {
 	if c.LLM.DeepSeek.ChatModel == "" {
 		c.LLM.DeepSeek.ChatModel = "deepseek-chat"
 	}
+	if c.LLM.Anthropic.BaseURL == "" {
+		c.LLM.Anthropic.BaseURL = "https://api.anthropic.com"
+	}
+	if c.LLM.Anthropic.ChatModel == "" {
+		c.LLM.Anthropic.ChatModel = "claude-3-opus-20240229"
+	}
 
 	// Embedding 配置默认值
 	if c.Embedding.Provider == "" {
@@ -204,6 +218,8 @@ func (c *Config) setDefaults() {
 			c.Extractor.BaseURL = c.LLM.Ollama.BaseURL
 		} else if c.Extractor.Provider == "deepseek" {
 			c.Extractor.BaseURL = c.LLM.DeepSeek.BaseURL
+		} else if c.Extractor.Provider == "anthropic" {
+			c.Extractor.BaseURL = c.LLM.Anthropic.BaseURL
 		}
 	}
 	if c.Extractor.Model == "" {
@@ -301,12 +317,16 @@ func (c *Config) setDefaults() {
 
 // Validate 验证配置
 func (c *Config) Validate() error {
-	if c.Base.Provider != "ollama" && c.Base.Provider != "deepseek" {
-		return fmt.Errorf("invalid provider: %s (must be 'ollama' or 'deepseek')", c.Base.Provider)
+	if c.Base.Provider != "ollama" && c.Base.Provider != "deepseek" && c.Base.Provider != "anthropic" {
+		return fmt.Errorf("invalid provider: %s (must be 'ollama', 'deepseek', or 'anthropic')", c.Base.Provider)
 	}
 
 	if c.Base.Provider == "deepseek" && c.LLM.DeepSeek.APIKey == "" {
 		return fmt.Errorf("deepseek api_key is required when provider is 'deepseek'")
+	}
+
+	if c.Base.Provider == "anthropic" && c.LLM.Anthropic.APIKey == "" {
+		return fmt.Errorf("anthropic api_key is required when provider is 'anthropic'")
 	}
 
 	return nil

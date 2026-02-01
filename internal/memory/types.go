@@ -14,13 +14,15 @@ type Profile struct {
 
 // ExtractedMemory 提取的记忆（用于 JSON 传输）
 type ExtractedMemory struct {
-	Type       string  `json:"type"`        // profile | preference | rule | fact
-	Key        string  `json:"key"`         // e.g. "language"
-	Value      string  `json:"value"`       // e.g. "Chinese"
+	Type       string  `json:"type"`        // scene | state | items | emotion | event | relationship
+	Key        string  `json:"key"`         // e.g. "time", "mood", "possession"
+	Value      string  `json:"value"`       // e.g. "晚上8点", "开心", "手机"
 	Confidence float64 `json:"confidence"`  // 0~1
 	AlsoVector bool    `json:"also_vector"` // 是否也写入 Qdrant（便于检索）
 	Text       string  `json:"text"`        // 写入 Qdrant 的语义文本（可选）
 	Owner      string  `json:"owner"`       // user | agent，标识记忆的所有者
+	Layer      int     `json:"layer"`       // 记忆层级：1=硬记忆(永久), 2=中等记忆(半永久), 3=软记忆(临时)
+	Importance float64 `json:"importance"`  // 重要性评分 0~1，用于决定记忆层级
 }
 
 // Memory GORM 模型 - 数据库中的记忆表
@@ -32,6 +34,8 @@ type Memory struct {
 	Value          string         `gorm:"column:mvalue;type:text;not null" json:"value"`
 	Confidence     float64        `gorm:"type:real;not null;default:0.7" json:"confidence"`
 	Owner          string         `gorm:"type:text;not null;default:'user'" json:"owner"`
+	Layer          int            `gorm:"type:integer;not null;default:2" json:"layer"`           // 记忆层级：1=硬, 2=中, 3=软
+	Importance     float64        `gorm:"type:real;not null;default:0.5" json:"importance"`       // 重要性评分
 	UpdatedAt      time.Time      `gorm:"autoUpdateTime" json:"updated_at"`
 	AccessCount    int            `gorm:"type:integer;not null;default:0" json:"access_count"`
 	LastAccessedAt *time.Time     `gorm:"type:datetime" json:"last_accessed_at,omitempty"`

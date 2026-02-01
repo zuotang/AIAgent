@@ -142,13 +142,28 @@ func (s *ChatService) HandleChat(c echo.Context) error {
 	windowMem := memory.NewWindowMemory(10) // 最多保留10轮对话
 	println("加载历史聊天记录作为上下文")
 
-	// 从数据库加载最近的聊天记录
-	historyMessages, err := s.orch.GetChatHistory(c.Request().Context(), userID, 20, 0) // 加载最近20条消息
-	if err != nil {
-		println("Failed to load chat history:", err.Error())
-		// 加载失败不影响继续，只是没有上下文
+	// 检查是否有压缩上下文
+	compressedCtx, err := s.orch.GetStore().GetCompressedContext(c.Request().Context(), userID)
+	var historyMessages []memory.ChatMessage
+
+	if err == nil && compressedCtx.LastMessageID > 0 {
+		// 有压缩上下文，只加载新消息
+		println("发现压缩上下文，LastMessageID:", compressedCtx.LastMessageID)
+		historyMessages, err = s.orch.GetChatHistoryAfterID(c.Request().Context(), userID, compressedCtx.LastMessageID, 20)
+		if err != nil {
+			println("Failed to load chat history after ID:", err.Error())
+		}
 	} else {
-		// 将历史消息按时间正序排列（数据库返回的是倒序）
+		// 没有压缩上下文，加载所有历史消息
+		println("没有压缩上下文，加载所有历史消息")
+		historyMessages, err = s.orch.GetChatHistory(c.Request().Context(), userID, 20, 0)
+		if err != nil {
+			println("Failed to load chat history:", err.Error())
+		}
+	}
+
+	// 将历史消息按时间正序排列（数据库返回的是倒序）
+	if len(historyMessages) > 0 {
 		for i := len(historyMessages) - 1; i >= 0; i-- {
 			msg := historyMessages[i]
 			// 找到成对的 user 和 assistant 消息
@@ -160,8 +175,17 @@ func (s *ChatService) HandleChat(c echo.Context) error {
 		println("已加载", windowMem.Size(), "轮历史对话")
 	}
 
+	// 将当前用户消息添加到上下文（但不添加助手响应，因为还没生成）
+	// 这样conversationHistory就包含了历史对话 + 当前用户消息
+	conversationContext := windowMem.String()
+	if conversationContext != "" {
+		conversationContext += "\n\nUser: " + req.Message
+	} else {
+		conversationContext = "User: " + req.Message
+	}
+
 	// 处理消息
-	output, err := s.orch.ProcessMessage(context.Background(), userID, req.Message, windowMem.String(), prompt)
+	output, err := s.orch.ProcessMessage(context.Background(), userID, req.Message, conversationContext, prompt)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to process message: " + err.Error()})
 	}
@@ -251,11 +275,29 @@ func (s *ChatService) HandleChatStream(c echo.Context) error {
 	// 加载历史消息作为上下文
 	println("加载历史聊天记录作为上下文")
 	windowMem := memory.NewWindowMemory(10)
-	historyMessages, err := s.orch.GetChatHistory(c.Request().Context(), userID, 20, 0)
-	if err != nil {
-		println("Failed to load chat history:", err.Error())
+
+	// 检查是否有压缩上下文
+	compressedCtx, err := s.orch.GetStore().GetCompressedContext(c.Request().Context(), userID)
+	var historyMessages []memory.ChatMessage
+
+	if err == nil && compressedCtx.LastMessageID > 0 {
+		// 有压缩上下文，只加载新消息
+		println("发现压缩上下文，LastMessageID:", compressedCtx.LastMessageID)
+		historyMessages, err = s.orch.GetChatHistoryAfterID(c.Request().Context(), userID, compressedCtx.LastMessageID, 20)
+		if err != nil {
+			println("Failed to load chat history after ID:", err.Error())
+		}
 	} else {
-		// 将历史消息按时间正序排列并填充到窗口记忆
+		// 没有压缩上下文，加载所有历史消息
+		println("没有压缩上下文，加载所有历史消息")
+		historyMessages, err = s.orch.GetChatHistory(c.Request().Context(), userID, 20, 0)
+		if err != nil {
+			println("Failed to load chat history:", err.Error())
+		}
+	}
+
+	// 将历史消息按时间正序排列并填充到窗口记忆
+	if len(historyMessages) > 0 {
 		for i := len(historyMessages) - 1; i >= 0; i-- {
 			msg := historyMessages[i]
 			if i > 0 && msg.Role == "assistant" && historyMessages[i-1].Role == "user" {
@@ -264,6 +306,15 @@ func (s *ChatService) HandleChatStream(c echo.Context) error {
 			}
 		}
 		println("已加载", windowMem.Size(), "轮历史对话")
+	}
+
+	// 将当前用户消息添加到上下文（但不添加助手响应，因为还没生成）
+	// 这样conversationHistory就包含了历史对话 + 当前用户消息
+	conversationContext := windowMem.String()
+	if conversationContext != "" {
+		conversationContext += "\n\nUser: " + req.Message
+	} else {
+		conversationContext = "User: " + req.Message
 	}
 
 	println("流式回调")
@@ -277,7 +328,8 @@ func (s *ChatService) HandleChatStream(c echo.Context) error {
 	}
 	println("处理消息")
 	// 处理消息（流式）
-	_, err = s.orch.ProcessMessageStream(c.Request().Context(), userID, req.Message, windowMem.String(), prompt, streamCallback)
+	println(c.Request().Context())
+	_, err = s.orch.ProcessMessageStream(c.Request().Context(), userID, req.Message, conversationContext, prompt, streamCallback)
 	if err != nil {
 		println("处理消息失败")
 		println(err.Error())

@@ -22,6 +22,7 @@ type Orchestrator interface {
 	GetConfig() *config.Config
 	GetStore() *memory.Store
 	GetChatHistory(ctx context.Context, userID string, limit, offset int) ([]memory.ChatMessage, error)
+	GetChatHistoryAfterID(ctx context.Context, userID string, afterID uint, limit int) ([]memory.ChatMessage, error)
 	GetChatSessions(ctx context.Context, userID string) ([]memory.ChatSession, error)
 }
 
@@ -72,6 +73,11 @@ func (o *orchestrator) GetChatHistory(ctx context.Context, userID string, limit,
 	return o.memStore.GetChatHistory(ctx, userID, limit, offset)
 }
 
+// GetChatHistoryAfterID 获取指定消息ID之后的聊天记录
+func (o *orchestrator) GetChatHistoryAfterID(ctx context.Context, userID string, afterID uint, limit int) ([]memory.ChatMessage, error) {
+	return o.memStore.GetChatHistoryAfterID(ctx, userID, afterID, limit)
+}
+
 // GetChatSessions 获取聊天会话列表
 func (o *orchestrator) GetChatSessions(ctx context.Context, userID string) ([]memory.ChatSession, error) {
 	return o.memStore.GetChatSessions(ctx, userID)
@@ -85,24 +91,71 @@ func (o *orchestrator) ProcessMessage(
 	conversationHistory string,
 	systemPrompt string,
 ) (agent.Output, error) {
-	// 1. 并行查询记忆
-	structuredText, semanticDocs, err := o.retrieveMemories(ctx, userID, userText)
-	if err != nil {
-		return agent.Output{}, err
-	}
+	// 1. 查询记忆（已完全禁用）
+	// structuredText, semanticDocs, err := o.retrieveMemories(ctx, userID, userText)
+	// if err != nil {
+	// 	return agent.Output{}, err
+	// }
 
 	// 2. 显示上下文统计（debug模式）
-	if o.config.Base.Debug {
-		o.showContextStats(systemPrompt, structuredText, semanticDocs, conversationHistory, userText)
+	// if o.config.Base.Debug {
+	// 	o.showContextStats(systemPrompt, structuredText, semanticDocs, conversationHistory, userText)
+	// }
+
+	// 3. 增量压缩对话上下文
+	compressedContext := conversationHistory
+	shouldCompress := ShouldCompressContext(conversationHistory, 2000)
+
+	if shouldCompress { // 超过2000字符时压缩
+		if o.config.Base.Debug {
+			log.Printf("[DEBUG] 触发增量压缩 - 当前上下文长度: %d", len(conversationHistory))
+		}
+
+		// 使用 extractor 模型进行增量压缩
+		compressorModel := o.config.Extractor.Model
+		if compressorModel == "" {
+			compressorModel = o.chatModel
+		}
+
+		// 注意：这里传入0作为lastMessageID，因为压缩发生在保存新消息之前
+		// 实际的LastMessageID会在保存消息后更新
+		compressed, err := CompressContextIncremental(ctx, o.llmClient, o.memStore, userID, conversationHistory, 0, compressorModel, 200)
+		if err != nil {
+			if o.config.Base.Debug {
+				log.Printf("[DEBUG] 增量压缩失败: %v，使用原始上下文", err)
+			}
+			// 压缩失败，使用原始上下文
+		} else {
+			compressedContext = compressed
+			if o.config.Base.Debug {
+				log.Printf("[DEBUG] 增量压缩完成 - 压缩后长度: %d", len(compressedContext))
+				log.Printf("[DEBUG] 压缩后内容: %s", compressedContext)
+			}
+		}
+	} else {
+		// 未达到压缩阈值，使用上次压缩的上下文 + 加载的历史作为Agent输入
+		lastCompressed, err := o.memStore.GetCompressedContext(ctx, userID)
+		if err == nil && lastCompressed.CompressedText != "" {
+			// 有上次的压缩结果，追加加载的历史作为上下文
+			compressedContext = lastCompressed.CompressedText + "\n\n" + conversationHistory
+			if o.config.Base.Debug {
+				log.Printf("[DEBUG] 使用上次压缩 + 加载历史作为上下文 - 总长度: %d", len(compressedContext))
+			}
+		} else {
+			// 没有上次的压缩结果，直接使用原始上下文
+			if o.config.Base.Debug {
+				log.Printf("[DEBUG] 首次对话或无压缩历史 - 使用原始上下文，长度: %d", len(conversationHistory))
+			}
+		}
 	}
 
-	// 3. 构建Agent输入
+	// 4. 构建Agent输入（不使用记忆）
 	input := agent.Input{
 		UserID:       userID,
 		Message:      userText,
 		SystemPrompt: systemPrompt,
-		Memory:       o.formatMemories(structuredText, semanticDocs),
-		Conversation: conversationHistory,
+		Memory:       "", // 记忆功能已完全禁用
+		Conversation: compressedContext,
 	}
 
 	// 4. 执行Agent
@@ -111,31 +164,74 @@ func (o *orchestrator) ProcessMessage(
 		return agent.Output{}, err
 	}
 
-	// 保存聊天记录
+	// 保存聊天记录并获取消息ID
 	sessionID := fmt.Sprintf("%s_%d", userID, time.Now().Unix())
-	if err := o.memStore.SaveChatMessage(ctx, userID, "user", userText, sessionID); err != nil && o.config.Base.Debug {
+	_, err = o.memStore.SaveChatMessage(ctx, userID, "user", userText, sessionID)
+	if err != nil && o.config.Base.Debug {
 		log.Printf("[DEBUG] 保存用户消息失败: %v", err)
 	}
-	if err := o.memStore.SaveChatMessage(ctx, userID, "assistant", output.Response, sessionID); err != nil && o.config.Base.Debug {
+	assistantMsgID, err := o.memStore.SaveChatMessage(ctx, userID, "assistant", output.Response, sessionID)
+	if err != nil && o.config.Base.Debug {
 		log.Printf("[DEBUG] 保存助手响应失败: %v", err)
 	}
 
-	// 5. 异步提取并存储记忆（智能触发）
-	if o.shouldExtractMemory(userText, output.Response) {
-		go func() {
-			// 使用 background context 避免父 context 取消影响异步任务
-			// 设置超时防止 goroutine 泄漏
-			bgCtx, cancel := context.WithTimeout(context.Background(), time.Duration(o.config.Base.Timeout)*time.Second)
-			defer cancel()
-
-			if err := o.extractAndStoreMemories(bgCtx, userID, conversationHistory, userText, output.Response); err != nil {
+	// 更新压缩上下文的LastMessageID
+	if assistantMsgID > 0 {
+		lastCompressed, err := o.memStore.GetCompressedContext(ctx, userID)
+		if err == nil {
+			// 如果未触发压缩，需要追加本次对话到压缩上下文
+			if !shouldCompress {
+				// 构建本次对话内容
+				currentTurn := fmt.Sprintf("User: %s\nAssistant: %s", userText, output.Response)
+				// 追加到压缩上下文
+				lastCompressed.CompressedText = lastCompressed.CompressedText + "\n\n" + currentTurn
 				if o.config.Base.Debug {
-					log.Printf("[DEBUG] 异步提取记忆失败: %v", err)
+					log.Printf("[DEBUG] 追加本次对话到压缩上下文 - 新增长度: %d", len(currentTurn))
 				}
 			}
-		}()
-	} else if o.config.Base.Debug {
-		log.Printf("[DEBUG] 跳过记忆提取：未触发条件")
+			// 更新LastMessageID为最新的助手消息ID
+			lastCompressed.LastMessageID = assistantMsgID
+			if err := o.memStore.UpsertCompressedContext(ctx, lastCompressed); err != nil && o.config.Base.Debug {
+				log.Printf("[DEBUG] 更新LastMessageID失败: %v", err)
+			} else if o.config.Base.Debug {
+				log.Printf("[DEBUG] 已更新LastMessageID: %d", assistantMsgID)
+			}
+		} else if shouldCompress {
+			// 如果没有压缩上下文但触发了压缩，创建一个新的
+			newCompressed := &memory.CompressedContext{
+				UserID:         userID,
+				CompressedText: compressedContext,
+				LastMessageID:  assistantMsgID,
+			}
+			if err := o.memStore.UpsertCompressedContext(ctx, newCompressed); err != nil && o.config.Base.Debug {
+				log.Printf("[DEBUG] 创建压缩上下文失败: %v", err)
+			}
+		}
+	}
+
+	// 5. 异步提取并存储记忆（智能触发）
+	// 异步提取记忆（已禁用）
+	// 保留实现代码，但不调用记忆提取功能
+	/*
+		if o.shouldExtractMemory(userText, output.Response) {
+			go func() {
+				// 使用 background context 避免父 context 取消影响异步任务
+				// 设置超时防止 goroutine 泄漏
+				bgCtx, cancel := context.WithTimeout(context.Background(), time.Duration(o.config.Base.Timeout)*time.Second)
+				defer cancel()
+
+				if err := o.extractAndStoreMemories(bgCtx, userID, conversationHistory, userText, output.Response); err != nil {
+					if o.config.Base.Debug {
+						log.Printf("[DEBUG] 异步提取记忆失败: %v", err)
+					}
+				}
+			}()
+		} else if o.config.Base.Debug {
+			log.Printf("[DEBUG] 跳过记忆提取：未触发条件")
+		}
+	*/
+	if o.config.Base.Debug {
+		log.Printf("[DEBUG] 记忆提取功能已禁用")
 	}
 
 	return output, nil
@@ -150,24 +246,68 @@ func (o *orchestrator) ProcessMessageStream(
 	systemPrompt string,
 	callback func(string) error,
 ) (agent.Output, error) {
-	// 1. 并行查询记忆
-	structuredText, semanticDocs, err := o.retrieveMemories(ctx, userID, userText)
-	if err != nil {
-		return agent.Output{}, err
-	}
+	// 1. 查询记忆（已完全禁用）
+	// structuredText, semanticDocs, err := o.retrieveMemories(ctx, userID, userText)
+	// if err != nil {
+	// 	return agent.Output{}, err
+	// }
 
 	// 2. 显示上下文统计（debug模式）
-	if o.config.Base.Debug {
-		o.showContextStats(systemPrompt, structuredText, semanticDocs, conversationHistory, userText)
+	// if o.config.Base.Debug {
+	// 	o.showContextStats(systemPrompt, structuredText, semanticDocs, conversationHistory, userText)
+	// }
+
+	// 3. 增量压缩对话上下文
+	compressedContext := conversationHistory
+	shouldCompressStream := ShouldCompressContext(conversationHistory, 1000)
+
+	if shouldCompressStream { // 超过1000字符时压缩
+		if o.config.Base.Debug {
+			log.Printf("[DEBUG] 流式处理 - 触发增量压缩 - 当前上下文长度: %d", len(conversationHistory))
+		}
+
+		compressorModel := o.config.Extractor.Model
+		if compressorModel == "" {
+			compressorModel = o.chatModel
+		}
+
+		// 注意：这里传入0作为lastMessageID，因为压缩发生在保存新消息之前
+		// 实际的LastMessageID会在保存消息后更新
+		compressed, err := CompressContextIncremental(ctx, o.llmClient, o.memStore, userID, conversationHistory, 0, compressorModel, 200)
+		if err != nil {
+			if o.config.Base.Debug {
+				log.Printf("[DEBUG] 增量压缩失败: %v，使用原始上下文", err)
+			}
+		} else {
+			compressedContext = compressed
+			if o.config.Base.Debug {
+				log.Printf("[DEBUG] 流式处理 - 增量压缩完成 - 压缩后长度: %d", len(compressedContext))
+			}
+		}
+	} else {
+		// 未达到压缩阈值，使用上次压缩的上下文 + 加载的历史作为Agent输入
+		lastCompressed, err := o.memStore.GetCompressedContext(ctx, userID)
+		if err == nil && lastCompressed.CompressedText != "" {
+			// 有上次的压缩结果，追加加载的历史作为上下文
+			compressedContext = lastCompressed.CompressedText + "\n\n" + conversationHistory
+			if o.config.Base.Debug {
+				log.Printf("[DEBUG] 流式处理 - 使用上次压缩 + 加载历史作为上下文 - 总长度: %d", len(compressedContext))
+			}
+		} else {
+			// 没有上次的压缩结果，直接使用原始上下文
+			if o.config.Base.Debug {
+				log.Printf("[DEBUG] 流式处理 - 首次对话或无压缩历史 - 使用原始上下文，长度: %d", len(conversationHistory))
+			}
+		}
 	}
 
-	// 3. 构建Agent输入
+	// 4. 构建Agent输入（不使用记忆）
 	input := agent.Input{
 		UserID:       userID,
 		Message:      userText,
 		SystemPrompt: systemPrompt,
-		Memory:       o.formatMemories(structuredText, semanticDocs),
-		Conversation: conversationHistory,
+		Memory:       "", // 记忆功能已完全禁用
+		Conversation: compressedContext,
 	}
 
 	// 4. 执行Agent流式处理
@@ -176,31 +316,64 @@ func (o *orchestrator) ProcessMessageStream(
 		return agent.Output{}, err
 	}
 
-	// 5. 保存聊天记录
+	// 5. 保存聊天记录并获取消息ID
 	sessionID := fmt.Sprintf("%s_%d", userID, time.Now().Unix())
-	if err := o.memStore.SaveChatMessage(ctx, userID, "user", userText, sessionID); err != nil && o.config.Base.Debug {
+	_, err = o.memStore.SaveChatMessage(ctx, userID, "user", userText, sessionID)
+	if err != nil && o.config.Base.Debug {
 		log.Printf("[DEBUG] 保存用户消息失败: %v", err)
 	}
-	if err := o.memStore.SaveChatMessage(ctx, userID, "assistant", output.Response, sessionID); err != nil && o.config.Base.Debug {
+	assistantMsgID, err := o.memStore.SaveChatMessage(ctx, userID, "assistant", output.Response, sessionID)
+	if err != nil && o.config.Base.Debug {
 		log.Printf("[DEBUG] 保存助手响应失败: %v", err)
 	}
 
-	// 6. 异步提取并存储记忆（智能触发）
-	if o.shouldExtractMemory(userText, output.Response) {
-		go func() {
-			// 使用 background context 避免父 context 取消影响异步任务
-			// 设置超时防止 goroutine 泄漏
-			bgCtx, cancel := context.WithTimeout(context.Background(), time.Duration(o.config.Base.Timeout)*time.Second)
-			defer cancel()
-
-			if err := o.extractAndStoreMemories(bgCtx, userID, conversationHistory, userText, output.Response); err != nil {
-				if o.config.Base.Debug {
-					log.Printf("[DEBUG] 异步提取记忆失败: %v", err)
-				}
+	// 更新压缩上下文的LastMessageID
+	if assistantMsgID > 0 {
+		lastCompressed, err := o.memStore.GetCompressedContext(ctx, userID)
+		if err == nil {
+			// 更新LastMessageID为最新的助手消息ID
+			lastCompressed.LastMessageID = assistantMsgID
+			if err := o.memStore.UpsertCompressedContext(ctx, lastCompressed); err != nil && o.config.Base.Debug {
+				log.Printf("[DEBUG] 更新LastMessageID失败: %v", err)
+			} else if o.config.Base.Debug {
+				log.Printf("[DEBUG] 流式处理 - 已更新LastMessageID: %d", assistantMsgID)
 			}
-		}()
-	} else if o.config.Base.Debug {
-		log.Printf("[DEBUG] 跳过记忆提取：未触发条件")
+		} else if ShouldCompressContext(conversationHistory, 4000) {
+			// 如果没有压缩上下文但触发了压缩，创建一个新的
+			newCompressed := &memory.CompressedContext{
+				UserID:         userID,
+				CompressedText: compressedContext,
+				LastMessageID:  assistantMsgID,
+			}
+			if err := o.memStore.UpsertCompressedContext(ctx, newCompressed); err != nil && o.config.Base.Debug {
+				log.Printf("[DEBUG] 创建压缩上下文失败: %v", err)
+			}
+		}
+	}
+
+	// 6. 异步提取并存储记忆（智能触发）
+	// 异步提取记忆（已禁用）
+	// 保留实现代码，但不调用记忆提取功能
+	/*
+		if o.shouldExtractMemory(userText, output.Response) {
+			go func() {
+				// 使用 background context 避免父 context 取消影响异步任务
+				// 设置超时防止 goroutine 泄漏
+				bgCtx, cancel := context.WithTimeout(context.Background(), time.Duration(o.config.Base.Timeout)*time.Second)
+				defer cancel()
+
+				if err := o.extractAndStoreMemories(bgCtx, userID, conversationHistory, userText, output.Response); err != nil {
+					if o.config.Base.Debug {
+						log.Printf("[DEBUG] 异步提取记忆失败: %v", err)
+					}
+				}
+			}()
+		} else if o.config.Base.Debug {
+			log.Printf("[DEBUG] 跳过记忆提取：未触发条件")
+		}
+	*/
+	if o.config.Base.Debug {
+		log.Printf("[DEBUG] 记忆提取功能已禁用")
 	}
 
 	return output, nil
@@ -218,16 +391,19 @@ func (o *orchestrator) retrieveMemories(
 		err        error
 	}
 
-	structuredCh := make(chan result, 1)
+	// 结构化记忆查询已禁用
+	// structuredCh := make(chan result, 1)
 	semanticCh := make(chan result, 1)
 
-	// 并行查询 SQLite
-	go func() {
-		callCtx, cancel := context.WithTimeout(ctx, time.Duration(o.config.Base.Timeout)*time.Second)
-		defer cancel()
-		text, err := o.memStore.RenderStructuredMemory(callCtx, userID, 30)
-		structuredCh <- result{structured: text, err: err}
-	}()
+	// 并行查询 SQLite（已禁用）
+	/*
+		go func() {
+			callCtx, cancel := context.WithTimeout(ctx, time.Duration(o.config.Base.Timeout)*time.Second)
+			defer cancel()
+			text, err := o.memStore.RenderStructuredMemory(callCtx, userID, 30)
+			structuredCh <- result{structured: text, err: err}
+		}()
+	*/
 
 	// 并行查询 Qdrant
 	go func() {
@@ -238,28 +414,31 @@ func (o *orchestrator) retrieveMemories(
 	}()
 
 	// 收集结果
-	structuredResult := <-structuredCh
+	// structuredResult := <-structuredCh
 	semanticResult := <-semanticCh
 
-	if structuredResult.err != nil && o.config.Base.Debug {
-		log.Printf("SQLite 查询失败: %v\n", structuredResult.err)
+	// 结构化记忆已禁用，返回空字符串
+	structuredText := ""
+	if o.config.Base.Debug {
+		log.Printf("[DEBUG] 结构化记忆查询已禁用")
 	}
+
 	if semanticResult.err != nil {
 		return "", nil, semanticResult.err
 	}
 
-	return structuredResult.structured, semanticResult.semantic, nil
+	return structuredText, semanticResult.semantic, nil
 }
 
 // formatMemories 格式化记忆为文本
 func (o *orchestrator) formatMemories(structured string, semantic []rag.Doc) string {
 	var sb strings.Builder
 
-	sb.WriteString("【结构化长期记忆(SQLite)】\n")
-	sb.WriteString(structured)
-	sb.WriteString("\n\n")
+	//sb.WriteString("【结构化长期记忆(SQLite)】\n")
+	//sb.WriteString(structured)
+	//sb.WriteString("\n\n")
 
-	sb.WriteString("【语义长期记忆(Qdrant)】\n")
+	//sb.WriteString("【语义长期记忆(Qdrant)】\n")
 	for i, doc := range semantic {
 		if i >= o.config.Storage.Qdrant.TopK {
 			break

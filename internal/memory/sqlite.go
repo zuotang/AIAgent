@@ -78,6 +78,8 @@ CREATE TABLE IF NOT EXISTS memories (
   mvalue TEXT NOT NULL,
   confidence REAL NOT NULL DEFAULT 0.7,
   owner TEXT NOT NULL DEFAULT 'user',
+  layer INTEGER NOT NULL DEFAULT 2,
+  importance REAL NOT NULL DEFAULT 0.5,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   access_count INTEGER NOT NULL DEFAULT 0,
   last_accessed_at DATETIME,
@@ -119,6 +121,17 @@ CREATE TABLE IF NOT EXISTS agents (
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   deleted_at DATETIME,
   FOREIGN KEY (prompt_id) REFERENCES prompts(id)
+);
+
+CREATE TABLE IF NOT EXISTS compressed_contexts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL UNIQUE,
+  compressed_text TEXT,
+  last_message_id INTEGER,
+  uncompressed_len INTEGER DEFAULT 0,
+  last_compress_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_unique ON memories(user_id, mtype, mkey, owner);
@@ -247,8 +260,8 @@ func (s *Store) SetDebug(debug bool) {
 	}
 }
 
-// SaveChatMessage 保存聊天消息
-func (s *Store) SaveChatMessage(ctx context.Context, userID, role, content, sessionID string) error {
+// SaveChatMessage 保存聊天消息并返回消息ID
+func (s *Store) SaveChatMessage(ctx context.Context, userID, role, content, sessionID string) (uint, error) {
 	msg := &ChatMessage{
 		UserID:    userID,
 		Role:      role,
@@ -256,7 +269,11 @@ func (s *Store) SaveChatMessage(ctx context.Context, userID, role, content, sess
 		SessionID: sessionID,
 	}
 
-	return s.db.WithContext(ctx).Create(msg).Error
+	err := s.db.WithContext(ctx).Create(msg).Error
+	if err != nil {
+		return 0, err
+	}
+	return msg.ID, nil
 }
 
 // GetChatHistory 获取用户的聊天记录
@@ -268,6 +285,19 @@ func (s *Store) GetChatHistory(ctx context.Context, userID string, limit, offset
 		Order("created_at DESC").
 		Limit(limit).
 		Offset(offset).
+		Find(&messages).Error
+
+	return messages, err
+}
+
+// GetChatHistoryAfterID 获取指定消息ID之后的聊天记录
+func (s *Store) GetChatHistoryAfterID(ctx context.Context, userID string, afterID uint, limit int) ([]ChatMessage, error) {
+	var messages []ChatMessage
+
+	err := s.db.WithContext(ctx).
+		Where("user_id = ? AND id > ?", userID, afterID).
+		Order("created_at DESC").
+		Limit(limit).
 		Find(&messages).Error
 
 	return messages, err

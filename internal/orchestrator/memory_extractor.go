@@ -37,7 +37,26 @@ func ExtractMemories(
 	includeHistory bool,
 ) ([]memory.ExtractedMemory, error) {
 	sys := `你是记忆提取器，只输出 JSON。
-提取对话中的场景化信息，记录对话发生的情境和状态。
+提取对话中的场景化信息，并根据重要性和持久性分配记忆层级。
+
+【三层记忆架构】
+1. 硬记忆（Layer 1）- 永久存储，核心信息
+   - 身份信息：姓名、年龄、性别、职业
+   - 核心偏好：重要的喜好、价值观
+   - 关键事实：不会改变的信息
+   - 特点：高重要性(0.8-1.0)，永久保存
+
+2. 中等记忆（Layer 2）- 半永久，上下文信息
+   - 近期事件：最近发生的事情
+   - 对话主题：讨论过的话题
+   - 情感状态：情绪、关系进展
+   - 特点：中等重要性(0.4-0.8)，可能过期
+
+3. 软记忆（Layer 3）- 临时，当前会话
+   - 当前场景：时间、地点、环境
+   - 临时状态：当前心情、正在做的事
+   - 一次性信息：不需要长期保存的内容
+   - 特点：低重要性(0.0-0.4)，会话结束后清除
 
 类型：
 - scene: 场景信息（时间、地点、环境、天气、氛围）
@@ -48,35 +67,44 @@ func ExtractMemories(
 - relationship: 关系信息（关系进展、互动方式、称呼变化）
 
 各类型提取的 key 规范（key 名称不能包含 user、agent 字样）：
-- scene: time (时间), location (地点), environment (环境), weather (天气), atmosphere (氛围), scenario (具体场景)
-- state: physical_state (身体状态), mental_state (心理状态), mood (心情), energy_level (精力水平), activity (正在做的事)
-- items: possession (拥有的物品), tool (使用的工具), equipment (装备), resource (资源)
-- emotion: emotion_tone (情绪基调), feeling (感受), intimacy (亲密度), attitude (态度)
-- event: important_event (重要事件), milestone (里程碑), activity_done (完成的活动), plan (计划)
-- relationship: relationship_level (关系程度), interaction_style (互动方式), nickname (昵称/称呼), trust_level (信任度)
+- scene: time, location, environment, weather, atmosphere, scenario
+- state: physical_state, mental_state, mood, energy_level, activity
+- items: possession, tool, equipment, resource
+- emotion: emotion_tone, feeling, intimacy, attitude
+- event: important_event, milestone, activity_done, plan
+- relationship: relationship_level, interaction_style, nickname, trust_level
 
 归属 (owner)：
-- "user" - 用户相关的信息（用户的状态、物品、情绪等）
-- "agent" - 助手相关的信息（助手的状态、物品、情绪等）
-- 只提取明确表达的信息，不要推测或猜测
+- "user" - 用户相关的信息
+- "agent" - 助手相关的信息
+
+【重要性评分规则】
+- 1.0: 核心身份信息（姓名、年龄等）→ Layer 1
+- 0.8-0.9: 重要偏好、关键事实 → Layer 1
+- 0.6-0.7: 重要事件、主题讨论 → Layer 2
+- 0.4-0.5: 一般事件、情绪状态 → Layer 2
+- 0.2-0.3: 临时场景、当前状态 → Layer 3
+- 0.0-0.1: 一次性信息 → Layer 3
 
 提取原则：
 1. 只提取本轮对话中明确提到的信息
-2. 记录具体的场景细节和状态变化
-3. 不提取临时的、一次性的信息
-4. 关注有助于理解对话情境的信息
+2. 根据信息的持久性和重要性分配层级
+3. 核心身份信息必须标记为 Layer 1
+4. 临时场景信息标记为 Layer 3
 5. 严禁把助手对用户的推测当成事实提取
 
 【重要】只从"本轮对话"中提取，不要从"历史对话"中提取（历史对话仅供理解上下文）
 
 输出格式：
-{"memories":[{"type":"scene","key":"time","value":"晚上8点","confidence":1.0,"also_vector":true,"owner":"user","text":"对话发生在晚上8点"}]}
+{"memories":[{"type":"relationship","key":"nickname","value":"小明","confidence":1.0,"also_vector":true,"owner":"user","text":"用户的昵称是小明","layer":1,"importance":0.9}]}
 
 要求：
 - key用英文小写+下划线
-- confidence为0~1（确定性：1.0=明确提到，0.8=暗示，0.6=推测）
-- also_vector=true表示写入向量库以便语义检索
-- text是对该记忆的自然语言描述，用于向量检索`
+- confidence为0~1（确定性）
+- importance为0~1（重要性，决定层级）
+- layer为1/2/3（根据importance自动分配：>=0.8→1, 0.4-0.8→2, <0.4→3）
+- also_vector=true表示写入向量库
+- text是对该记忆的自然语言描述`
 
 	var prompt string
 	if includeHistory && recentTurns != "" {
@@ -186,6 +214,29 @@ func normalize(m memory.ExtractedMemory) memory.ExtractedMemory {
 		}
 		if m.Key == "time" || m.Key == "datetime" {
 			m.Key = "time"
+		}
+	}
+
+	// 根据 importance 自动分配 layer（如果未指定）
+	if m.Layer == 0 {
+		if m.Importance >= 0.8 {
+			m.Layer = 1 // 硬记忆
+		} else if m.Importance >= 0.4 {
+			m.Layer = 2 // 中等记忆
+		} else {
+			m.Layer = 3 // 软记忆
+		}
+	}
+
+	// 如果 importance 未指定，根据 layer 设置默认值
+	if m.Importance == 0 {
+		switch m.Layer {
+		case 1:
+			m.Importance = 0.9
+		case 2:
+			m.Importance = 0.6
+		case 3:
+			m.Importance = 0.3
 		}
 	}
 

@@ -8,41 +8,26 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
-// LLMClient 定义 LLM 客户端接口
-type LLMClient interface {
-	Chat(ctx context.Context, msgs []ChatMessage, model ...string) (string, error)
-	SetDebug(debug bool)
+type UserChatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
-// StreamClient 定义支持流式响应的客户端接口
-type StreamClient interface {
-	LLMClient
-	ChatStream(ctx context.Context, msgs []ChatMessage, model ...string) (<-chan string, <-chan error)
-}
-
-// EmbedClient 定义 Embedding 客户端接口
-type EmbedClient interface {
-	Embed(ctx context.Context, text string) ([]float32, error)
-}
-
-type Client struct {
+type AnthropicClient struct {
 	BaseURL   string
+	APIKey    string
 	ChatModel string
-	EmbModel  string
 	HTTP      *http.Client
+	EmbModel  string
 	Debug     bool
 }
 
-// SetDebug 设置调试模式
-func (c *Client) SetDebug(debug bool) {
-	c.Debug = debug
-}
-
-func New(baseURL, chatModel, embModel string) *Client {
-	return &Client{
+func NewAnthropic(baseURL, chatModel, embModel string) *AnthropicClient {
+	return &AnthropicClient{
 		BaseURL:   baseURL,
 		ChatModel: chatModel,
 		EmbModel:  embModel,
@@ -52,21 +37,20 @@ func New(baseURL, chatModel, embModel string) *Client {
 	}
 }
 
-type ChatMessage struct {
-	Role    string `json:"role"` // "system" | "user" | "assistant"
-	Content string `json:"content"`
+func (c *AnthropicClient) SetDebug(debug bool) {
+	c.Debug = debug
 }
 
-func (c *Client) Chat(ctx context.Context, msgs []ChatMessage, model ...string) (string, error) {
+func (c *AnthropicClient) Chat(ctx context.Context, msgs []ChatMessage, model ...string) (string, error) {
 	// 确定使用的模型，如果提供了参数则使用参数中的模型，否则使用默认模型
 	useModel := c.ChatModel
 	if len(model) > 0 && model[0] != "" {
 		useModel = model[0]
 	}
-
+	prompt := convertMessagesToPrompt(msgs)
 	reqBody := map[string]any{
 		"model":    useModel,
-		"messages": msgs,
+		"messages": prompt,
 		"stream":   false,
 	}
 	b, _ := json.Marshal(reqBody)
@@ -110,7 +94,7 @@ func (c *Client) Chat(ctx context.Context, msgs []ChatMessage, model ...string) 
 }
 
 // ChatStream 流式聊天，返回token流
-func (c *Client) ChatStream(ctx context.Context, msgs []ChatMessage, model ...string) (<-chan string, <-chan error) {
+func (c *AnthropicClient) ChatStream(ctx context.Context, msgs []ChatMessage, model ...string) (<-chan string, <-chan error) {
 	tokenCh := make(chan string, 100)
 	errCh := make(chan error, 1)
 
@@ -123,10 +107,10 @@ func (c *Client) ChatStream(ctx context.Context, msgs []ChatMessage, model ...st
 		if len(model) > 0 && model[0] != "" {
 			useModel = model[0]
 		}
-
+		prompts := convertMessagesToPrompt(msgs)
 		reqBody := map[string]any{
 			"model":    useModel,
-			"messages": msgs,
+			"messages": prompts,
 			"stream":   true, // 启用流式模式
 		}
 		b, _ := json.Marshal(reqBody)
@@ -200,9 +184,43 @@ func (c *Client) ChatStream(ctx context.Context, msgs []ChatMessage, model ...st
 	return tokenCh, errCh
 }
 
-func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
+func convertMessagesToPrompt(msgs []ChatMessage) []map[string]any {
+	var prompt strings.Builder
+
+	for _, msg := range msgs {
+		switch msg.Role {
+		case "system":
+			prompt.WriteString(msg.Content)
+			prompt.WriteString("\n\n")
+		case "user":
+			prompt.WriteString("Human: ")
+			prompt.WriteString(msg.Content)
+			prompt.WriteString("\n\n")
+		case "assistant":
+			prompt.WriteString("Assistant: ")
+			prompt.WriteString(msg.Content)
+			prompt.WriteString("\n\n")
+		}
+	}
+
+	// 添加最后的 Assistant: 提示
+	prompt.WriteString("Assistant:")
+	userMsg := UserChatMessage{
+		Role:    "user",
+		Content: prompt.String(),
+	}
+
+	userMsgs := []map[string]any{{
+		"role":    userMsg.Role,
+		"content": userMsg.Content,
+	}}
+
+	return userMsgs
+}
+
+func (c *AnthropicClient) Embed(ctx context.Context, text string) ([]float32, error) {
 	reqBody := map[string]any{
-		"model":  c.EmbModel,
+		"model":  c.ChatModel,
 		"prompt": text,
 	}
 	b, _ := json.Marshal(reqBody)

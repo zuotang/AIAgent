@@ -114,6 +114,12 @@ func initLLMClient(cfg *config.Config) (models.LLMClient, string) {
 		llmClient = deepseek
 		chatModel = cfg.LLM.DeepSeek.ChatModel
 		log.Printf("使用 DeepSeek API (base_url: %s, model: %s)", cfg.LLM.DeepSeek.BaseURL, chatModel)
+	case "anthropic":
+		anthropic := models.NewAnthropic(cfg.LLM.Anthropic.BaseURL, cfg.LLM.Anthropic.ChatModel, cfg.Embedding.Model)
+		anthropic.SetDebug(cfg.Base.Debug)
+		llmClient = anthropic
+		chatModel = cfg.LLM.Anthropic.ChatModel
+		log.Printf("使用 Anthropic API (base_url: %s, model: %s)", cfg.LLM.Anthropic.BaseURL, chatModel)
 	case "ollama":
 		ollama := models.New(cfg.LLM.Ollama.BaseURL, cfg.LLM.Ollama.ChatModel, cfg.Embedding.Model)
 		ollama.SetDebug(cfg.Base.Debug)
@@ -121,7 +127,7 @@ func initLLMClient(cfg *config.Config) (models.LLMClient, string) {
 		chatModel = cfg.LLM.Ollama.ChatModel
 		log.Printf("使用 Ollama (model: %s)", chatModel)
 	default:
-		log.Fatalf("Unknown provider: %s. Use 'ollama' or 'deepseek'", cfg.Base.Provider)
+		log.Fatalf("Unknown provider: %s. Use 'ollama', 'deepseek', or 'anthropic'", cfg.Base.Provider)
 	}
 
 	return llmClient, chatModel
