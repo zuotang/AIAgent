@@ -141,6 +141,8 @@ type MemoryConfig struct {
 	IncludeHistoryContext     bool   `yaml:"include_history_context"`      // 提取时包含历史上下文
 	MinConfidence             float64 `yaml:"min_confidence"`              // 最小置信度
 	MaxMemoriesPerExtraction  int    `yaml:"max_memories_per_extraction"`  // 每次提取的最大记忆数
+	OnDemandMinLength         int    `yaml:"on_demand_min_length"`         // 按需加载触发的最小消息长度
+	OnDemandKeywords          []string `yaml:"on_demand_keywords"`         // 按需加载关键词
 }
 
 // Load 从文件加载配置
@@ -301,6 +303,16 @@ func (c *Config) setDefaults() {
 	}
 	if c.Memory.MaxMemoriesPerExtraction == 0 {
 		c.Memory.MaxMemoriesPerExtraction = 20
+	}
+	if c.Memory.OnDemandMinLength == 0 {
+		c.Memory.OnDemandMinLength = 8
+	}
+	if len(c.Memory.OnDemandKeywords) == 0 {
+		c.Memory.OnDemandKeywords = []string{
+			"回忆", "记得", "还记得", "你记得", "过去", "以前", "曾经", "当年", "那天", "第一次",
+			"童年", "小时候", "身世", "秘密", "约定", "誓言", "任务", "线索", "剧情", "设定",
+			"桃花", "旧事", "熟悉", "我们以前", "我们曾",
+		}
 	}
 
 	// 性能配置默认值

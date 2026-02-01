@@ -3,6 +3,8 @@ package memory
 import (
 	"fmt"
 	"strings"
+
+	"agent-langchain/internal/utils"
 )
 
 // Turn 对话轮次
@@ -24,6 +26,8 @@ func NewWindowMemory(n int) *WindowMemory {
 
 // Add 添加一轮对话
 func (m *WindowMemory) Add(user, assistant string) {
+	user = utils.PreprocessLite(user)
+	assistant = utils.PreprocessLite(assistant)
 	m.Turns = append(m.Turns, Turn{User: user, Assistant: assistant})
 	if len(m.Turns) > m.N {
 		m.Turns = m.Turns[len(m.Turns)-m.N:]

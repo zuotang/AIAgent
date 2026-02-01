@@ -10,6 +10,7 @@ import (
 
 	"agent-langchain/internal/memory"
 	"agent-langchain/internal/orchestrator"
+	"agent-langchain/internal/utils"
 )
 
 // ChatService 聊天服务
@@ -178,10 +179,11 @@ func (s *ChatService) HandleChat(c echo.Context) error {
 	// 将当前用户消息添加到上下文（但不添加助手响应，因为还没生成）
 	// 这样conversationHistory就包含了历史对话 + 当前用户消息
 	conversationContext := windowMem.String()
+	cleanUser := utils.PreprocessLite(req.Message)
 	if conversationContext != "" {
-		conversationContext += "\n\nUser: " + req.Message
+		conversationContext += "\n\nUser: " + cleanUser
 	} else {
-		conversationContext = "User: " + req.Message
+		conversationContext = "User: " + cleanUser
 	}
 
 	// 处理消息

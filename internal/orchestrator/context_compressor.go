@@ -7,6 +7,7 @@ import (
 
 	"agent-langchain/internal/memory"
 	"agent-langchain/internal/models"
+	"agent-langchain/internal/utils"
 )
 
 // CompressContextIncremental 增量压缩上下文
@@ -40,27 +41,41 @@ func CompressContextIncremental(
 	var systemPrompt string
 	if previousSummary == "" {
 		// 第一次压缩
-		systemPrompt = fmt.Sprintf(`你是上下文压缩器。将对话历史压缩为简短摘要（保持但不超过%d字）。
+		systemPrompt = fmt.Sprintf(`你是角色扮演对话的上下文压缩器。将对话历史压缩为“可继续扮演”的简短摘要（不超过%d字）。
 
-压缩原则：
-1. 保留关键信息：人物、事件、环境、动作、重要细节
-2. 去除冗余：重复内容、客套话、无关信息
-3. 使用简洁语言：用最少的字表达最多的信息
-4. 保持时序：按对话顺序组织信息
-5. 突出重点：强调重要的转折和关键点
+核心目标：保持互动体验与剧情连贯性，宁可少概括，也不要丢失角色人设与剧情关键点。
+
+保留优先级（从高到低）：
+1) 角色人设与关系：称呼、口头禅、性格设定、关系进展、隐含规则
+2) 剧情主线与关键事件：触发点、承诺、冲突、伏笔、任务目标
+3) 场景与状态：时间地点、氛围、当前行动、重要物品/线索
+4) 情感语气：情绪变化、互动基调、重要对白语气
+
+压缩规则：
+- 去除重复、寒暄、无关信息
+- 合并同义信息，只保留一次
+- 保持时间顺序与因果关系
+- 保留必要的原话短语（口头禅/关键承诺），其余改写
 
 输出格式：
 直接输出压缩后的摘要，不要添加任何解释或标记。`, maxLength)
 	} else {
 		// 增量压缩
-		systemPrompt = fmt.Sprintf(`你是上下文压缩器。基于之前的摘要和新的对话，生成更新后的摘要（保持但不超过%d字）。
+		systemPrompt = fmt.Sprintf(`你是角色扮演对话的上下文压缩器。基于“之前摘要 + 新对话”，生成更新后的摘要（不超过%d字）。
 
-压缩原则：
-1. 整合信息：将新对话的关键信息整合到之前的摘要中
-2. 保持连贯：确保新旧信息的逻辑连贯性
-3. 去除冗余：如果新对话重复了旧信息，只保留一份
-4. 突出新内容：重点关注新对话中的重要信息
-5. 控制长度：如果超长，优先保留最新和最重要的信息
+核心目标：保持互动体验与剧情连贯性，宁可少概括，也不要丢失角色人设与剧情关键点。
+
+合并规则：
+- 将新对话的重要信息融合进摘要，保持连贯
+- 重复信息只保留一份
+- 突出新出现的剧情推进、关系变化、情绪转折
+- 如果超长，优先保留最新且最关键的信息
+
+保留优先级（从高到低）：
+1) 角色人设与关系：称呼、口头禅、性格设定、关系进展、隐含规则
+2) 剧情主线与关键事件：触发点、承诺、冲突、伏笔、任务目标
+3) 场景与状态：时间地点、氛围、当前行动、重要物品/线索
+4) 情感语气：情绪变化、互动基调、重要对白语气
 
 输出格式：
 直接输出更新后的摘要，不要添加任何解释或标记。`, maxLength)
@@ -126,14 +141,21 @@ func CompressContext(
 	}
 
 	// 压缩提示词
-	systemPrompt := fmt.Sprintf(`你是上下文压缩器。将对话历史压缩为简短摘要（保持但不超过%d字）。
+	systemPrompt := fmt.Sprintf(`你是角色扮演对话的上下文压缩器。将对话历史压缩为“可继续扮演”的简短摘要（不超过%d字）。
 
-压缩原则：
-1. 保留关键信息：人物、事件、环境、动作重要细节
-2. 去除冗余：重复内容、客套话、无关信息
-3. 使用简洁语言：用最少的字表达最多的信息
-4. 保持时序：按对话顺序组织信息
-5. 突出重点：强调重要的转折和关键点
+核心目标：保持互动体验与剧情连贯性，宁可少概括，也不要丢失角色人设与剧情关键点。
+
+保留优先级（从高到低）：
+1) 角色人设与关系：称呼、口头禅、性格设定、关系进展、隐含规则
+2) 剧情主线与关键事件：触发点、承诺、冲突、伏笔、任务目标
+3) 场景与状态：时间地点、氛围、当前行动、重要物品/线索
+4) 情感语气：情绪变化、互动基调、重要对白语气
+
+压缩规则：
+- 去除重复、寒暄、无关信息
+- 合并同义信息，只保留一次
+- 保持时间顺序与因果关系
+- 保留必要的原话短语（口头禅/关键承诺），其余改写
 
 输出格式：
 直接输出压缩后的摘要，不要添加任何解释或标记。`, maxLength)
@@ -169,4 +191,16 @@ func CompressContext(
 // 当上下文超过一定长度时才压缩
 func ShouldCompressContext(conversationHistory string, threshold int) bool {
 	return len(conversationHistory) > threshold
+}
+
+// ShouldCompressContextByTokens 判断是否需要基于 token 使用率压缩
+// thresholdPercent 表示总上下文占用率触发压缩（例如 60 表示占用 60%）
+func ShouldCompressContextByTokens(stats utils.ContextStats, thresholdPercent float64) bool {
+	if stats.ModelLimit <= 0 {
+		return false
+	}
+	if thresholdPercent <= 0 {
+		thresholdPercent = 60.0
+	}
+	return stats.UsagePercent >= thresholdPercent
 }

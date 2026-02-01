@@ -91,22 +91,39 @@ func (o *orchestrator) ProcessMessage(
 	conversationHistory string,
 	systemPrompt string,
 ) (agent.Output, error) {
-	// 1. 查询记忆（已完全禁用）
-	// structuredText, semanticDocs, err := o.retrieveMemories(ctx, userID, userText)
-	// if err != nil {
-	// 	return agent.Output{}, err
-	// }
+	// 1. 按需加载记忆（剧情触发时）
+	structuredText := ""
+	var semanticDocs []rag.Doc
+	memoryText := ""
+	if o.shouldLoadMemory(userText) {
+		var err error
+		structuredText, semanticDocs, err = o.retrieveMemories(ctx, userID, userText)
+		if err != nil {
+			if o.config.Base.Debug {
+				log.Printf("[DEBUG] 按需记忆检索失败: %v", err)
+			}
+		} else {
+			memoryText = o.formatMemories(structuredText, semanticDocs)
+			if o.config.Base.Debug {
+				log.Printf("[DEBUG] 按需记忆已加载")
+			}
+		}
+	}
 
 	// 2. 显示上下文统计（debug模式）
 	// if o.config.Base.Debug {
 	// 	o.showContextStats(systemPrompt, structuredText, semanticDocs, conversationHistory, userText)
 	// }
 
-	// 3. 增量压缩对话上下文
+	// 3. 增量压缩对话上下文（基于 token 占用率触发）
 	compressedContext := conversationHistory
-	shouldCompress := ShouldCompressContext(conversationHistory, 2000)
+	stats := utils.CalculateContextStats(systemPrompt, memoryText, conversationHistory, userText, o.chatModel)
+	shouldCompress := ShouldCompressContextByTokens(stats, 60.0) // 保留约 40% 余量
+	if o.config.Base.Debug {
+		log.Printf("[DEBUG] 上下文占用率: %.1f%% (Total=%d, Limit=%d)", stats.UsagePercent, stats.TotalTokens, stats.ModelLimit)
+	}
 
-	if shouldCompress { // 超过2000字符时压缩
+	if shouldCompress {
 		if o.config.Base.Debug {
 			log.Printf("[DEBUG] 触发增量压缩 - 当前上下文长度: %d", len(conversationHistory))
 		}
@@ -154,7 +171,7 @@ func (o *orchestrator) ProcessMessage(
 		UserID:       userID,
 		Message:      userText,
 		SystemPrompt: systemPrompt,
-		Memory:       "", // 记忆功能已完全禁用
+		Memory:       memoryText, // 按需记忆（仅本轮注入）
 		Conversation: compressedContext,
 	}
 
@@ -182,7 +199,9 @@ func (o *orchestrator) ProcessMessage(
 			// 如果未触发压缩，需要追加本次对话到压缩上下文
 			if !shouldCompress {
 				// 构建本次对话内容
-				currentTurn := fmt.Sprintf("User: %s\nAssistant: %s", userText, output.Response)
+				cleanUser := utils.PreprocessLite(userText)
+				cleanAssistant := utils.PreprocessLite(output.Response)
+				currentTurn := fmt.Sprintf("User: %s\nAssistant: %s", cleanUser, cleanAssistant)
 				// 追加到压缩上下文
 				lastCompressed.CompressedText = lastCompressed.CompressedText + "\n\n" + currentTurn
 				if o.config.Base.Debug {
@@ -246,22 +265,39 @@ func (o *orchestrator) ProcessMessageStream(
 	systemPrompt string,
 	callback func(string) error,
 ) (agent.Output, error) {
-	// 1. 查询记忆（已完全禁用）
-	// structuredText, semanticDocs, err := o.retrieveMemories(ctx, userID, userText)
-	// if err != nil {
-	// 	return agent.Output{}, err
-	// }
+	// 1. 按需加载记忆（剧情触发时）
+	structuredText := ""
+	var semanticDocs []rag.Doc
+	memoryText := ""
+	if o.shouldLoadMemory(userText) {
+		var err error
+		structuredText, semanticDocs, err = o.retrieveMemories(ctx, userID, userText)
+		if err != nil {
+			if o.config.Base.Debug {
+				log.Printf("[DEBUG] 按需记忆检索失败: %v", err)
+			}
+		} else {
+			memoryText = o.formatMemories(structuredText, semanticDocs)
+			if o.config.Base.Debug {
+				log.Printf("[DEBUG] 按需记忆已加载")
+			}
+		}
+	}
 
 	// 2. 显示上下文统计（debug模式）
 	// if o.config.Base.Debug {
 	// 	o.showContextStats(systemPrompt, structuredText, semanticDocs, conversationHistory, userText)
 	// }
 
-	// 3. 增量压缩对话上下文
+	// 3. 增量压缩对话上下文（基于 token 占用率触发）
 	compressedContext := conversationHistory
-	shouldCompressStream := ShouldCompressContext(conversationHistory, 1000)
+	stats := utils.CalculateContextStats(systemPrompt, memoryText, conversationHistory, userText, o.chatModel)
+	shouldCompressStream := ShouldCompressContextByTokens(stats, 60.0) // 保留约 40% 余量
+	if o.config.Base.Debug {
+		log.Printf("[DEBUG] 流式处理 - 上下文占用率: %.1f%% (Total=%d, Limit=%d)", stats.UsagePercent, stats.TotalTokens, stats.ModelLimit)
+	}
 
-	if shouldCompressStream { // 超过1000字符时压缩
+	if shouldCompressStream {
 		if o.config.Base.Debug {
 			log.Printf("[DEBUG] 流式处理 - 触发增量压缩 - 当前上下文长度: %d", len(conversationHistory))
 		}
@@ -306,7 +342,7 @@ func (o *orchestrator) ProcessMessageStream(
 		UserID:       userID,
 		Message:      userText,
 		SystemPrompt: systemPrompt,
-		Memory:       "", // 记忆功能已完全禁用
+		Memory:       memoryText, // 按需记忆（仅本轮注入）
 		Conversation: compressedContext,
 	}
 
@@ -391,19 +427,16 @@ func (o *orchestrator) retrieveMemories(
 		err        error
 	}
 
-	// 结构化记忆查询已禁用
-	// structuredCh := make(chan result, 1)
+	structuredCh := make(chan result, 1)
 	semanticCh := make(chan result, 1)
 
-	// 并行查询 SQLite（已禁用）
-	/*
-		go func() {
-			callCtx, cancel := context.WithTimeout(ctx, time.Duration(o.config.Base.Timeout)*time.Second)
-			defer cancel()
-			text, err := o.memStore.RenderStructuredMemory(callCtx, userID, 30)
-			structuredCh <- result{structured: text, err: err}
-		}()
-	*/
+	// 并行查询 SQLite（结构化记忆）
+	go func() {
+		callCtx, cancel := context.WithTimeout(ctx, time.Duration(o.config.Base.Timeout)*time.Second)
+		defer cancel()
+		text, err := o.memStore.RenderStructuredMemory(callCtx, userID, 20)
+		structuredCh <- result{structured: text, err: err}
+	}()
 
 	// 并行查询 Qdrant
 	go func() {
@@ -414,13 +447,12 @@ func (o *orchestrator) retrieveMemories(
 	}()
 
 	// 收集结果
-	// structuredResult := <-structuredCh
+	structuredResult := <-structuredCh
 	semanticResult := <-semanticCh
 
-	// 结构化记忆已禁用，返回空字符串
-	structuredText := ""
-	if o.config.Base.Debug {
-		log.Printf("[DEBUG] 结构化记忆查询已禁用")
+	structuredText := structuredResult.structured
+	if structuredResult.err != nil && o.config.Base.Debug {
+		log.Printf("[DEBUG] 结构化记忆查询失败: %v", structuredResult.err)
 	}
 
 	if semanticResult.err != nil {
@@ -434,11 +466,15 @@ func (o *orchestrator) retrieveMemories(
 func (o *orchestrator) formatMemories(structured string, semantic []rag.Doc) string {
 	var sb strings.Builder
 
-	//sb.WriteString("【结构化长期记忆(SQLite)】\n")
-	//sb.WriteString(structured)
-	//sb.WriteString("\n\n")
-
-	//sb.WriteString("【语义长期记忆(Qdrant)】\n")
+	sb.WriteString("【角色记忆库（按需加载）】\n")
+	if structured != "" && structured != "(暂无长期记忆)" {
+		sb.WriteString("【结构化记忆】\n")
+		sb.WriteString(structured)
+		sb.WriteString("\n")
+	}
+	if len(semantic) > 0 {
+		sb.WriteString("【剧情/互动线索】\n")
+	}
 	for i, doc := range semantic {
 		if i >= o.config.Storage.Qdrant.TopK {
 			break
@@ -618,6 +654,24 @@ func (o *orchestrator) shouldExtractMemory(userText, assistantText string) bool 
 		// 默认使用保守策略
 		return o.shouldExtractConservative(userText, assistantText)
 	}
+}
+
+// shouldLoadMemory 判断是否需要按需加载记忆（剧情触发）
+func (o *orchestrator) shouldLoadMemory(userText string) bool {
+	if len(strings.TrimSpace(userText)) < o.config.Memory.OnDemandMinLength {
+		return false
+	}
+
+	for _, kw := range o.config.Memory.OnDemandKeywords {
+		if strings.Contains(userText, kw) {
+			if o.config.Base.Debug {
+				log.Printf("[DEBUG] 触发按需记忆加载: %s", kw)
+			}
+			return true
+		}
+	}
+
+	return false
 }
 
 // isSimpleResponse 检查是否为简单应答
