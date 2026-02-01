@@ -2,28 +2,30 @@
 
 # 基本配置
 base:
-  provider: ollama  # 主 LLM 提供商: ollama, deepseek 或 anthropic
-  debug: false      # 调试模式
+  provider: ollama  # 主 LLM 提供商: ollama 或 deepseek
+  debug: true      # 调试模式
   timeout: 60       # 超时时间（秒）
 
 # LLM 配置（用于主对话）
 llm:
+  # anthropic 配置
+  anthropic:
+    base_url: http://127.0.0.1:11434  # Claude API 基础 URL
+    api_key: ""  # 在这里填入你的 Claude API Key
+    chat_model: Rocinante-XU:12b # 聊天模型
+
   # Ollama 配置
   ollama:
     base_url: http://127.0.0.1:11434  # Ollama 服务地址
-    chat_model: gemma3:12b             # 聊天模型
+    #chat_model: Gemma-The-Writer:9B            # 聊天模型
+    chat_model: PsychosisU:9B            # 聊天模型
+    #chat_model: Llama3.3-Uncensored:8b             # 聊天模型
 
   # DeepSeek 配置
   deepseek:
     base_url: https://api.deepseek.com/v1  # DeepSeek API 基础 URL
     api_key: ""  # 在这里填入你的 DeepSeek API Key
     chat_model: deepseek-chat             # 模型名称
-
-  # Anthropic 配置
-  anthropic:
-    base_url: https://api.anthropic.com  # Anthropic API 基础 URL（或自定义兼容端点）
-    api_key: ""  # 在这里填入你的 Anthropic API Key
-    chat_model: claude-3-opus-20240229   # 模型名称
 
 # Embedding 配置（独立配置，用于向量化）
 embedding:
@@ -37,9 +39,9 @@ embedding:
 
 # 记忆提取器配置（独立配置，用于从对话中提取结构化记忆）
 extractor:
-  provider: ollama  # 提取器提供商: ollama, deepseek, anthropic, custom（留空则使用主 LLM）
+  provider: ollama  # 提取器提供商: ollama, deepseek, custom（留空则使用主 LLM）
   base_url: http://127.0.0.1:11434  # 提取器服务地址
-  model: "gemma3:4b"  # 提取器模型（留空则使用主 chat_model）
+  model: PsychosisU:9B       # 提取器模型（留空则使用主 chat_model）
   api_key: ""  # API Key（如果需要）
   # 提取器特定配置
   temperature: 0.1  # 温度（提取任务建议低温度）
@@ -47,7 +49,7 @@ extractor:
 
 # 分类器配置（用于智能触发判断）
 classifier:
-  provider: ollama  # 分类器提供商: ollama, deepseek, anthropic, custom
+  provider: ollama  # 分类器提供商: ollama, deepseek, custom
   base_url: http://127.0.0.1:11434  # 分类器服务地址
   model: qwen2.5:0.5b  # 分类器模型（建议使用小模型）
   api_key: ""  # API Key（如果需要）
@@ -86,6 +88,7 @@ services:
 # 记忆配置
 memory:
   window_size: 8            # 短期记忆窗口大小（对话轮数）
+  enable_extractor: true    # 启用记忆提取器（写入长期记忆）
   enable_smart_trigger: true  # 启用智能触发（节省 70-80% token）
   trigger_method: conservative  # 触发方法: keyword, llm, conservative
   min_message_length: 10      # 最小消息长度

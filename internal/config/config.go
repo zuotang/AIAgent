@@ -135,6 +135,7 @@ type DatabaseConfig struct {
 // MemoryConfig 记忆配置
 type MemoryConfig struct {
 	WindowSize                int    `yaml:"window_size"`                  // 短期记忆窗口大小
+	EnableExtractor           bool   `yaml:"enable_extractor"`             // 启用记忆提取器（写入长期记忆）
 	EnableSmartTrigger        bool   `yaml:"enable_smart_trigger"`         // 启用智能触发
 	TriggerMethod             string `yaml:"trigger_method"`               // 触发方法
 	MinMessageLength          int    `yaml:"min_message_length"`           // 最小消息长度

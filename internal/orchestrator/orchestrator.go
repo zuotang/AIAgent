@@ -229,9 +229,7 @@ func (o *orchestrator) ProcessMessage(
 	}
 
 	// 5. 异步提取并存储记忆（智能触发）
-	// 异步提取记忆（已禁用）
-	// 保留实现代码，但不调用记忆提取功能
-	/*
+	if o.config.Memory.EnableExtractor {
 		if o.shouldExtractMemory(userText, output.Response) {
 			go func() {
 				// 使用 background context 避免父 context 取消影响异步任务
@@ -248,9 +246,8 @@ func (o *orchestrator) ProcessMessage(
 		} else if o.config.Base.Debug {
 			log.Printf("[DEBUG] 跳过记忆提取：未触发条件")
 		}
-	*/
-	if o.config.Base.Debug {
-		log.Printf("[DEBUG] 记忆提取功能已禁用")
+	} else if o.config.Base.Debug {
+		log.Printf("[DEBUG] 记忆提取功能已禁用 (memory.enable_extractor=false)")
 	}
 
 	return output, nil
@@ -388,9 +385,7 @@ func (o *orchestrator) ProcessMessageStream(
 	}
 
 	// 6. 异步提取并存储记忆（智能触发）
-	// 异步提取记忆（已禁用）
-	// 保留实现代码，但不调用记忆提取功能
-	/*
+	if o.config.Memory.EnableExtractor {
 		if o.shouldExtractMemory(userText, output.Response) {
 			go func() {
 				// 使用 background context 避免父 context 取消影响异步任务
@@ -407,9 +402,8 @@ func (o *orchestrator) ProcessMessageStream(
 		} else if o.config.Base.Debug {
 			log.Printf("[DEBUG] 跳过记忆提取：未触发条件")
 		}
-	*/
-	if o.config.Base.Debug {
-		log.Printf("[DEBUG] 记忆提取功能已禁用")
+	} else if o.config.Base.Debug {
+		log.Printf("[DEBUG] 记忆提取功能已禁用 (memory.enable_extractor=false)")
 	}
 
 	return output, nil

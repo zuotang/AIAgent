@@ -10,7 +10,6 @@ import (
 
 	"agent-langchain/internal/memory"
 	"agent-langchain/internal/orchestrator"
-	"agent-langchain/internal/utils"
 )
 
 // ChatService 聊天服务
@@ -176,15 +175,8 @@ func (s *ChatService) HandleChat(c echo.Context) error {
 		println("已加载", windowMem.Size(), "轮历史对话")
 	}
 
-	// 将当前用户消息添加到上下文（但不添加助手响应，因为还没生成）
-	// 这样conversationHistory就包含了历史对话 + 当前用户消息
+	// 仅使用历史对话作为上下文，当前用户消息单独走 Message 字段
 	conversationContext := windowMem.String()
-	cleanUser := utils.PreprocessLite(req.Message)
-	if conversationContext != "" {
-		conversationContext += "\n\nUser: " + cleanUser
-	} else {
-		conversationContext = "User: " + cleanUser
-	}
 
 	// 处理消息
 	output, err := s.orch.ProcessMessage(context.Background(), userID, req.Message, conversationContext, prompt)
@@ -310,14 +302,8 @@ func (s *ChatService) HandleChatStream(c echo.Context) error {
 		println("已加载", windowMem.Size(), "轮历史对话")
 	}
 
-	// 将当前用户消息添加到上下文（但不添加助手响应，因为还没生成）
-	// 这样conversationHistory就包含了历史对话 + 当前用户消息
+	// 仅使用历史对话作为上下文，当前用户消息单独走 Message 字段
 	conversationContext := windowMem.String()
-	if conversationContext != "" {
-		conversationContext += "\n\nUser: " + req.Message
-	} else {
-		conversationContext = "User: " + req.Message
-	}
 
 	println("流式回调")
 	// 流式回调
