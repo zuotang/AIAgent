@@ -372,30 +372,39 @@ func (s *Store) UpsertExtractedMemories(ctx context.Context, userID string, agen
 		now := time.Now()
 
 		for _, m := range memories {
-			memory := &Memory{
-				UserID:     userID,
-				AgentID:    agentID,
-				Type:       m.Type,
-				Key:        m.Key,
-				Value:      m.Value,
-				Confidence: m.Confidence,
-				Owner:      m.Owner,
-				UpdatedAt:  now,
-			}
-
-			// 使用 GORM 的 Clauses 实现 UPSERT
-			// 如果记录存在（基于唯一索引），则更新；否则插入
-			result := tx.Where("user_id = ? AND agent_id = ? AND mtype = ? AND mkey = ? AND owner = ?",
+			// 先查询是否存在
+			var existing Memory
+			err := tx.Where("user_id = ? AND agent_id = ? AND mtype = ? AND mkey = ? AND owner = ?",
 				userID, agentID, m.Type, m.Key, m.Owner).
-				Assign(map[string]interface{}{
+				First(&existing).Error
+
+			if err == gorm.ErrRecordNotFound {
+				// 不存在，创建新记录
+				memory := &Memory{
+					UserID:     userID,
+					AgentID:    agentID,
+					Type:       m.Type,
+					Key:        m.Key,
+					Value:      m.Value,
+					Confidence: m.Confidence,
+					Owner:      m.Owner,
+					UpdatedAt:  now,
+				}
+				if err := tx.Create(memory).Error; err != nil {
+					return err
+				}
+			} else if err != nil {
+				// 查询出错
+				return err
+			} else {
+				// 存在，更新记录
+				if err := tx.Model(&existing).Updates(map[string]interface{}{
 					"mvalue":     m.Value,
 					"confidence": m.Confidence,
 					"updated_at": now,
-				}).
-				FirstOrCreate(memory)
-
-			if result.Error != nil {
-				return result.Error
+				}).Error; err != nil {
+					return err
+				}
 			}
 		}
 
