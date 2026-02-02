@@ -8,7 +8,8 @@ import (
 // CompressedContext 压缩后的上下文
 type CompressedContext struct {
 	ID              uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	UserID          string    `gorm:"type:text;not null;uniqueIndex" json:"user_id"`
+	UserID          string    `gorm:"type:text;not null" json:"user_id"`
+	AgentID         uint      `gorm:"type:integer;not null;default:1" json:"agent_id"` // Agent ID，用于隔离不同 agent 的上下文
 	CompressedText  string    `gorm:"type:text" json:"compressed_text"`           // 压缩后的文本
 	LastMessageID   uint      `gorm:"type:integer" json:"last_message_id"`        // 最后处理的消息ID
 	LastCompressAt  time.Time `gorm:"autoUpdateTime" json:"last_compress_at"`     // 最后压缩时间
@@ -23,10 +24,10 @@ func (CompressedContext) TableName() string {
 }
 
 // GetCompressedContext 获取用户的压缩上下文
-func (s *Store) GetCompressedContext(ctx context.Context, userID string) (*CompressedContext, error) {
+func (s *Store) GetCompressedContext(ctx context.Context, userID string, agentID uint) (*CompressedContext, error) {
 	var cc CompressedContext
 	err := s.db.WithContext(ctx).
-		Where("user_id = ?", userID).
+		Where("user_id = ? AND agent_id = ?", userID, agentID).
 		First(&cc).Error
 
 	if err != nil {
@@ -39,7 +40,7 @@ func (s *Store) GetCompressedContext(ctx context.Context, userID string) (*Compr
 func (s *Store) UpsertCompressedContext(ctx context.Context, cc *CompressedContext) error {
 	var existing CompressedContext
 	err := s.db.WithContext(ctx).
-		Where("user_id = ?", cc.UserID).
+		Where("user_id = ? AND agent_id = ?", cc.UserID, cc.AgentID).
 		First(&existing).Error
 
 	if err != nil {
@@ -58,8 +59,8 @@ func (s *Store) UpsertCompressedContext(ctx context.Context, cc *CompressedConte
 }
 
 // ClearCompressedContext 清除用户的压缩上下文
-func (s *Store) ClearCompressedContext(ctx context.Context, userID string) error {
+func (s *Store) ClearCompressedContext(ctx context.Context, userID string, agentID uint) error {
 	return s.db.WithContext(ctx).
-		Where("user_id = ?", userID).
+		Where("user_id = ? AND agent_id = ?", userID, agentID).
 		Delete(&CompressedContext{}).Error
 }

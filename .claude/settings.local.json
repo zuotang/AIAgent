@@ -13,7 +13,13 @@
       "Bash(git mv:*)",
       "Bash(timeout 3 go run:*)",
       "Bash(timeout 3 ./test_chat.exe:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(go run:*)",
+      "Bash(pkill:*)",
+      "Bash(taskkill:*)",
+      "Bash(bash:*)",
+      "Bash(tasklist:*)",
+      "Bash(sqlite3:*)"
     ]
   }
 }

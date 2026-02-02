@@ -211,7 +211,7 @@ func runConversationLoop(ctx context.Context, orch orchestrator.Orchestrator, cf
 		}
 
 		// 处理消息
-		output, err := orch.ProcessMessage(ctx, uid, userText, windowMem.String(), systemPrompt)
+		output, err := orch.ProcessMessage(ctx, uid, 1, userText, windowMem.String(), systemPrompt)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -229,7 +229,7 @@ func showMemoryStats(cfg *config.Config, userID string) {
 	}
 	defer memStore.Close()
 
-	stats, err := memStore.GetTopAccessedMemories(context.Background(), userID, 20)
+	stats, err := memStore.GetTopAccessedMemories(context.Background(), userID, 1, 20)
 	if err != nil {
 		log.Fatalf("获取统计信息失败: %v", err)
 	}

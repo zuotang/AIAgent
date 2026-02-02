@@ -17,13 +17,14 @@ func CompressContextIncremental(
 	llm models.LLMClient,
 	store *memory.Store,
 	userID string,
+	agentID uint,
 	newConversation string,
 	lastMessageID uint,
 	model string,
 	maxLength int,
 ) (string, error) {
 	// 获取上次压缩的上下文
-	lastCompressed, err := store.GetCompressedContext(ctx, userID)
+	lastCompressed, err := store.GetCompressedContext(ctx, userID, agentID)
 	var previousSummary string
 	if err != nil {
 		// 第一次压缩，没有历史

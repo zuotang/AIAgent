@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Agent-Langchain is a Go-based intelligent agent system that combines LLMs, vector databases (Qdrant), and structured storage (SQLite) to create a conversational agent with memory capabilities. The system can extract and store information from conversations, retrieve relevant memories, and provide contextually aware responses.
+Agent-Langchain is a Go-based intelligent agent system that combines LLMs, vector databases (Qdrant), and structured storage (SQLite) to create a multi-agent conversational system with memory capabilities. The system can extract and store information from conversations, retrieve relevant memories, and provide contextually aware responses. It supports multiple LLM providers (Ollama, DeepSeek, Anthropic) and features a database-driven agent management system.
 
 ## Build and Run Commands
 
@@ -80,6 +80,7 @@ go mod tidy
    - Supports streaming responses
    - Tool detection via `TOOL_CALL:` pattern in responses
    - Currently supports: calculator, speak tools
+   - **Multi-Agent System**: Agents are stored in database with configurable prompts, allowing dynamic agent creation and management
 
 4. **Memory System** (Dual Storage):
    - **SQLite** (`internal/memory/sqlite.go`): Structured memories (key-value pairs with confidence scores, access tracking)
@@ -89,7 +90,9 @@ go mod tidy
 5. **LLM Clients** (`internal/models/`):
    - `ollama.go`: Ollama API client (supports streaming)
    - `deepseek.go`: DeepSeek API client
-   - Both implement `LLMClient` interface
+   - `anthropic.go`: Anthropic/Claude API client
+   - All implement `LLMClient` interface
+   - Supports separate models for chat, embedding, extraction, and classification
 
 ### Memory Extraction Flow
 
@@ -104,11 +107,15 @@ Memory extraction happens **asynchronously** after response generation to avoid 
 ### Configuration System
 
 Configuration is loaded from `config.yaml` (see `config.example.yaml` for template). Key sections:
-- `base`: Provider selection (ollama/deepseek), debug mode, timeout
-- `llm`: Model configurations for both providers
+- `base`: Provider selection (ollama/deepseek/anthropic), debug mode, timeout
+- `llm`: Model configurations for all providers (ollama, deepseek, anthropic)
+- `embedding`: Separate embedding model configuration (provider, model, batch size)
+- `extractor`: Memory extraction model configuration (can use different model than chat)
+- `classifier`: Smart trigger classifier configuration (typically uses small, fast model)
 - `storage`: Database paths and Qdrant settings
-- `memory`: Window size, smart trigger settings, extractor model
+- `memory`: Window size, smart trigger settings, on-demand loading keywords
 - `services`: API port, RAG chunking strategy
+- `performance`: Concurrency, caching, and timeout settings
 
 ## Key Design Patterns
 
@@ -127,6 +134,9 @@ Tools are invoked via text pattern matching (`TOOL_CALL: tool_name("args")`) rat
 ### 5. Streaming Support
 Both Ollama client and Agent support streaming responses. The system checks if the client supports streaming and falls back to non-streaming if not.
 
+### 6. On-Demand Memory Loading
+Memory retrieval is triggered only when specific keywords are detected (e.g., "回忆", "记得", "还记得", "过去", "以前") or when message length exceeds threshold. This reduces latency for simple conversations while ensuring memories are available when contextually relevant.
+
 ## Important Implementation Notes
 
 ### Memory System
@@ -144,6 +154,8 @@ Both Ollama client and Agent support streaming responses. The system checks if t
 - `/api/chat`: Non-streaming chat
 - `/api/chat/stream`: Server-Sent Events streaming chat
 - `/api/knowledge/*`: Knowledge base management (ingest, query, list)
+- `/api/agent/*`: Agent management (list, get, create, update, delete)
+- `/api/prompt/*`: Prompt management (list, get, create, update, delete)
 - `/api/debug/*`: Debug utilities (config, logs, connection tests)
 
 ### Tool Development
@@ -177,6 +189,16 @@ The project uses GORM as the ORM framework for all SQLite operations.
 - Stores conversation history
 - Indexed by user_id and session_id
 - Automatic creation timestamp
+
+**Agent Model**:
+- Stores agent configurations (name, description, avatar)
+- Links to prompts via agent_id
+- Supports multiple agents per system
+
+**Prompt Model**:
+- Stores system prompts for agents
+- Versioning support (version field)
+- Active/inactive status management
 
 ### Key Features
 
@@ -220,3 +242,29 @@ store.SetDebug(true)  // Logs all SQL queries
 Tests are located alongside source files with `_test.go` suffix. Example: `internal/tools/calculator_test.go`, `internal/utils/tokens_test.go`.
 
 For database testing, GORM provides in-memory SQLite support.
+
+## Multi-Agent System
+
+The system supports multiple agents with database-driven configuration:
+
+### Agent Management
+- Agents are stored in the `agents` table with unique IDs
+- Each agent has: name, description, avatar, and timestamps
+- Agents can be created, updated, and deleted via API or database
+
+### Prompt Management
+- System prompts are stored in the `prompts` table
+- Each prompt links to an agent via `agent_id`
+- Supports versioning and active/inactive status
+- Multiple prompts can exist per agent (only one active at a time)
+
+### Usage
+When making a chat request, specify `agent_id` to use a specific agent's configuration. If not specified, the system uses the default agent (ID=1).
+
+```json
+{
+  "user_id": "user123",
+  "message": "Hello",
+  "agent_id": 2
+}
+```

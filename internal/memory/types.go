@@ -29,6 +29,7 @@ type ExtractedMemory struct {
 type Memory struct {
 	ID             uint           `gorm:"primaryKey;autoIncrement" json:"id"`
 	UserID         string         `gorm:"type:text;not null" json:"user_id"`
+	AgentID        uint           `gorm:"type:integer;not null;default:1" json:"agent_id"` // Agent ID，用于隔离不同 agent 的记忆
 	Type           string         `gorm:"column:mtype;type:text;not null" json:"type"`
 	Key            string         `gorm:"column:mkey;type:text;not null" json:"key"`
 	Value          string         `gorm:"column:mvalue;type:text;not null" json:"value"`
@@ -51,6 +52,7 @@ func (Memory) TableName() string {
 type ChatMessage struct {
 	ID        uint      `gorm:"primaryKey;autoIncrement" json:"id"`
 	UserID    string    `gorm:"type:text;not null" json:"user_id"`
+	AgentID   uint      `gorm:"type:integer;not null;default:1" json:"agent_id"` // Agent ID，用于隔离不同 agent 的对话
 	Role      string    `gorm:"type:text;not null" json:"role"`
 	Content   string    `gorm:"type:text;not null" json:"content"`
 	SessionID string    `gorm:"type:text" json:"session_id"`

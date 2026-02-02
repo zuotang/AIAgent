@@ -1,10 +1,12 @@
 package models
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 )
@@ -102,4 +104,107 @@ func (c *DeepSeekClient) Chat(ctx context.Context, msgs []ChatMessage, model ...
 // 如果需要 embedding，建议继续使用 Ollama 的 embedding 模型
 func (c *DeepSeekClient) Embed(ctx context.Context, text string) ([]float32, error) {
 	return nil, fmt.Errorf("DeepSeek API does not support embeddings, please use Ollama for embeddings")
+}
+
+// ChatStream 发送流式聊天请求到 DeepSeek API
+func (c *DeepSeekClient) ChatStream(ctx context.Context, msgs []ChatMessage, model ...string) (<-chan string, <-chan error) {
+	tokenCh := make(chan string, 100)
+	errCh := make(chan error, 1)
+
+	go func() {
+		defer close(tokenCh)
+		defer close(errCh)
+
+		// 确定使用的模型
+		useModel := c.ChatModel
+		if len(model) > 0 && model[0] != "" {
+			useModel = model[0]
+		}
+
+		reqBody := map[string]any{
+			"model":    useModel,
+			"messages": msgs,
+			"stream":   true, // 启用流式模式
+		}
+		b, _ := json.Marshal(reqBody)
+
+		// 调试输出
+		if c.Debug {
+			fmt.Printf("\033[31m[DEBUG] 发送流式请求到 DeepSeek API (model: %s)\033[0m\n", useModel)
+		}
+
+		req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/chat/completions", bytes.NewReader(b))
+		if err != nil {
+			errCh <- err
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+
+		resp, err := c.HTTP.Do(req)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode >= 300 {
+			errCh <- fmt.Errorf("deepseek chat stream http %d", resp.StatusCode)
+			return
+		}
+
+		// 逐行读取 SSE 流式响应
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			line := scanner.Text()
+
+			// 跳过空行
+			if len(line) == 0 {
+				continue
+			}
+
+			// SSE 格式：data: {...}
+			if len(line) > 6 && line[:6] == "data: " {
+				data := line[6:]
+
+				// 检查是否是结束标记
+				if data == "[DONE]" {
+					break
+				}
+
+				// 解析 JSON
+				var chunk struct {
+					Choices []struct {
+						Delta struct {
+							Content string `json:"content"`
+						} `json:"delta"`
+					} `json:"choices"`
+				}
+
+				if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+					// 忽略解析错误，继续处理下一行
+					if c.Debug {
+						fmt.Printf("\033[33m[DEBUG] 解析流式响应失败: %v, 数据: %s\033[0m\n", err, data)
+					}
+					continue
+				}
+
+				// 发送 token 到 channel
+				if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
+					select {
+					case tokenCh <- chunk.Choices[0].Delta.Content:
+					case <-ctx.Done():
+						errCh <- ctx.Err()
+						return
+					}
+				}
+			}
+		}
+
+		if err := scanner.Err(); err != nil && err != io.EOF {
+			errCh <- err
+		}
+	}()
+
+	return tokenCh, errCh
 }

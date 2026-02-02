@@ -73,6 +73,7 @@ func (s *Store) init() error {
 CREATE TABLE IF NOT EXISTS memories (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id TEXT NOT NULL,
+  agent_id INTEGER NOT NULL DEFAULT 1,
   mtype TEXT NOT NULL,
   mkey  TEXT NOT NULL,
   mvalue TEXT NOT NULL,
@@ -89,6 +90,7 @@ CREATE TABLE IF NOT EXISTS memories (
 CREATE TABLE IF NOT EXISTS chat_history (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id TEXT NOT NULL,
+  agent_id INTEGER NOT NULL DEFAULT 1,
   role TEXT NOT NULL,
   content TEXT NOT NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -125,7 +127,8 @@ CREATE TABLE IF NOT EXISTS agents (
 
 CREATE TABLE IF NOT EXISTS compressed_contexts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id TEXT NOT NULL UNIQUE,
+  user_id TEXT NOT NULL,
+  agent_id INTEGER NOT NULL DEFAULT 1,
   compressed_text TEXT,
   last_message_id INTEGER,
   uncompressed_len INTEGER DEFAULT 0,
@@ -134,10 +137,11 @@ CREATE TABLE IF NOT EXISTS compressed_contexts (
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_unique ON memories(user_id, mtype, mkey, owner);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_unique ON memories(user_id, agent_id, mtype, mkey, owner);
 CREATE INDEX IF NOT EXISTS idx_chat_history_user_id ON chat_history(user_id);
 CREATE INDEX IF NOT EXISTS idx_chat_history_session_id ON chat_history(session_id);
 CREATE INDEX IF NOT EXISTS idx_memories_deleted_at ON memories(deleted_at);
+CREATE INDEX IF NOT EXISTS idx_compressed_contexts_unique ON compressed_contexts(user_id, agent_id);
 CREATE INDEX IF NOT EXISTS idx_prompts_category ON prompts(category);
 CREATE INDEX IF NOT EXISTS idx_agents_prompt_id ON agents(prompt_id);
 CREATE INDEX IF NOT EXISTS idx_agents_is_active ON agents(is_active);
@@ -155,12 +159,16 @@ CREATE INDEX IF NOT EXISTS idx_agents_is_active ON agents(is_active);
 		s.db.Exec(`ALTER TABLE memories ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0`)
 		s.db.Exec(`ALTER TABLE memories ADD COLUMN last_accessed_at DATETIME`)
 		s.db.Exec(`ALTER TABLE memories ADD COLUMN deleted_at DATETIME`)
+		s.db.Exec(`ALTER TABLE memories ADD COLUMN agent_id INTEGER NOT NULL DEFAULT 1`)
+		s.db.Exec(`ALTER TABLE chat_history ADD COLUMN agent_id INTEGER NOT NULL DEFAULT 1`)
+		s.db.Exec(`ALTER TABLE compressed_contexts ADD COLUMN agent_id INTEGER NOT NULL DEFAULT 1`)
 
 		// 确保索引存在
-		s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_unique ON memories(user_id, mtype, mkey, owner)`)
+		s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_unique ON memories(user_id, agent_id, mtype, mkey, owner)`)
 		s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_chat_history_user_id ON chat_history(user_id)`)
 		s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_chat_history_session_id ON chat_history(session_id)`)
 		s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_memories_deleted_at ON memories(deleted_at)`)
+		s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_compressed_contexts_unique ON compressed_contexts(user_id, agent_id)`)
 
 		// 检查并创建新表
 		var promptTableCount int64
@@ -261,9 +269,10 @@ func (s *Store) SetDebug(debug bool) {
 }
 
 // SaveChatMessage 保存聊天消息并返回消息ID
-func (s *Store) SaveChatMessage(ctx context.Context, userID, role, content, sessionID string) (uint, error) {
+func (s *Store) SaveChatMessage(ctx context.Context, userID, role, content, sessionID string, agentID uint) (uint, error) {
 	msg := &ChatMessage{
 		UserID:    userID,
+		AgentID:   agentID,
 		Role:      role,
 		Content:   content,
 		SessionID: sessionID,
@@ -277,11 +286,11 @@ func (s *Store) SaveChatMessage(ctx context.Context, userID, role, content, sess
 }
 
 // GetChatHistory 获取用户的聊天记录
-func (s *Store) GetChatHistory(ctx context.Context, userID string, limit, offset int) ([]ChatMessage, error) {
+func (s *Store) GetChatHistory(ctx context.Context, userID string, agentID uint, limit, offset int) ([]ChatMessage, error) {
 	var messages []ChatMessage
 
 	err := s.db.WithContext(ctx).
-		Where("user_id = ?", userID).
+		Where("user_id = ? AND agent_id = ?", userID, agentID).
 		Order("created_at DESC").
 		Limit(limit).
 		Offset(offset).
@@ -291,11 +300,11 @@ func (s *Store) GetChatHistory(ctx context.Context, userID string, limit, offset
 }
 
 // GetChatHistoryAfterID 获取指定消息ID之后的聊天记录
-func (s *Store) GetChatHistoryAfterID(ctx context.Context, userID string, afterID uint, limit int) ([]ChatMessage, error) {
+func (s *Store) GetChatHistoryAfterID(ctx context.Context, userID string, agentID uint, afterID uint, limit int) ([]ChatMessage, error) {
 	var messages []ChatMessage
 
 	err := s.db.WithContext(ctx).
-		Where("user_id = ? AND id > ?", userID, afterID).
+		Where("user_id = ? AND agent_id = ? AND id > ?", userID, agentID, afterID).
 		Order("created_at DESC").
 		Limit(limit).
 		Find(&messages).Error
@@ -304,13 +313,13 @@ func (s *Store) GetChatHistoryAfterID(ctx context.Context, userID string, afterI
 }
 
 // GetChatSessions 获取用户的聊天会话列表
-func (s *Store) GetChatSessions(ctx context.Context, userID string) ([]ChatSession, error) {
+func (s *Store) GetChatSessions(ctx context.Context, userID string, agentID uint) ([]ChatSession, error) {
 	var sessions []ChatSession
 
 	err := s.db.WithContext(ctx).
 		Model(&ChatMessage{}).
 		Select("session_id, MAX(content) as latest_message, MAX(created_at) as last_activity").
-		Where("user_id = ? AND session_id != ''", userID).
+		Where("user_id = ? AND agent_id = ? AND session_id != ''", userID, agentID).
 		Group("session_id").
 		Order("last_activity DESC").
 		Scan(&sessions).Error
@@ -319,7 +328,7 @@ func (s *Store) GetChatSessions(ctx context.Context, userID string) ([]ChatSessi
 }
 
 // UpsertExtractedMemories 插入或更新提取的记忆
-func (s *Store) UpsertExtractedMemories(ctx context.Context, userID string, memories []ExtractedMemory) error {
+func (s *Store) UpsertExtractedMemories(ctx context.Context, userID string, agentID uint, memories []ExtractedMemory) error {
 	if len(memories) == 0 {
 		return nil
 	}
@@ -331,6 +340,7 @@ func (s *Store) UpsertExtractedMemories(ctx context.Context, userID string, memo
 		for _, m := range memories {
 			memory := &Memory{
 				UserID:     userID,
+				AgentID:    agentID,
 				Type:       m.Type,
 				Key:        m.Key,
 				Value:      m.Value,
@@ -341,8 +351,8 @@ func (s *Store) UpsertExtractedMemories(ctx context.Context, userID string, memo
 
 			// 使用 GORM 的 Clauses 实现 UPSERT
 			// 如果记录存在（基于唯一索引），则更新；否则插入
-			result := tx.Where("user_id = ? AND mtype = ? AND mkey = ? AND owner = ?",
-				userID, m.Type, m.Key, m.Owner).
+			result := tx.Where("user_id = ? AND agent_id = ? AND mtype = ? AND mkey = ? AND owner = ?",
+				userID, agentID, m.Type, m.Key, m.Owner).
 				Assign(map[string]interface{}{
 					"mvalue":     m.Value,
 					"confidence": m.Confidence,
@@ -360,11 +370,11 @@ func (s *Store) UpsertExtractedMemories(ctx context.Context, userID string, memo
 }
 
 // RenderStructuredMemory 渲染结构化记忆为文本
-func (s *Store) RenderStructuredMemory(ctx context.Context, userID string, limit int) (string, error) {
+func (s *Store) RenderStructuredMemory(ctx context.Context, userID string, agentID uint, limit int) (string, error) {
 	var memories []Memory
 
 	err := s.db.WithContext(ctx).
-		Where("user_id = ?", userID).
+		Where("user_id = ? AND agent_id = ?", userID, agentID).
 		Order("updated_at DESC").
 		Limit(limit).
 		Find(&memories).Error
@@ -414,14 +424,14 @@ func (s *Store) RenderStructuredMemory(ctx context.Context, userID string, limit
 }
 
 // GetTopAccessedMemories 获取访问次数最多的记忆
-func (s *Store) GetTopAccessedMemories(ctx context.Context, userID string, limit int) ([]MemoryStat, error) {
+func (s *Store) GetTopAccessedMemories(ctx context.Context, userID string, agentID uint, limit int) ([]MemoryStat, error) {
 	var stats []MemoryStat
 
 	err := s.db.WithContext(ctx).
 		Model(&Memory{}).
 		Select("owner, mtype as type, mkey as key, mvalue as value, confidence, access_count, "+
 			"datetime(last_accessed_at) as last_accessed, datetime(updated_at) as updated_at").
-		Where("user_id = ? AND access_count > 0", userID).
+		Where("user_id = ? AND agent_id = ? AND access_count > 0", userID, agentID).
 		Order("access_count DESC, updated_at DESC").
 		Limit(limit).
 		Scan(&stats).Error
@@ -430,12 +440,12 @@ func (s *Store) GetTopAccessedMemories(ctx context.Context, userID string, limit
 }
 
 // IncrementAccessCount 增加记忆的访问次数
-func (s *Store) IncrementAccessCount(ctx context.Context, userID string, mtype, mkey, owner string) error {
+func (s *Store) IncrementAccessCount(ctx context.Context, userID string, agentID uint, mtype, mkey, owner string) error {
 	now := time.Now()
 
 	return s.db.WithContext(ctx).
 		Model(&Memory{}).
-		Where("user_id = ? AND mtype = ? AND mkey = ? AND owner = ?", userID, mtype, mkey, owner).
+		Where("user_id = ? AND agent_id = ? AND mtype = ? AND mkey = ? AND owner = ?", userID, agentID, mtype, mkey, owner).
 		Updates(map[string]interface{}{
 			"access_count":      gorm.Expr("access_count + 1"),
 			"last_accessed_at": now,
@@ -458,11 +468,11 @@ func (s *Store) SaveProfile(profile *Profile) error {
 }
 
 // GetMemoriesByType 根据类型获取记忆
-func (s *Store) GetMemoriesByType(ctx context.Context, userID, mtype string) ([]Memory, error) {
+func (s *Store) GetMemoriesByType(ctx context.Context, userID string, agentID uint, mtype string) ([]Memory, error) {
 	var memories []Memory
 
 	err := s.db.WithContext(ctx).
-		Where("user_id = ? AND mtype = ?", userID, mtype).
+		Where("user_id = ? AND agent_id = ? AND mtype = ?", userID, agentID, mtype).
 		Order("updated_at DESC").
 		Find(&memories).Error
 
@@ -470,30 +480,30 @@ func (s *Store) GetMemoriesByType(ctx context.Context, userID, mtype string) ([]
 }
 
 // DeleteMemory 删除记忆（软删除）
-func (s *Store) DeleteMemory(ctx context.Context, userID string, mtype, mkey, owner string) error {
+func (s *Store) DeleteMemory(ctx context.Context, userID string, agentID uint, mtype, mkey, owner string) error {
 	return s.db.WithContext(ctx).
-		Where("user_id = ? AND mtype = ? AND mkey = ? AND owner = ?", userID, mtype, mkey, owner).
+		Where("user_id = ? AND agent_id = ? AND mtype = ? AND mkey = ? AND owner = ?", userID, agentID, mtype, mkey, owner).
 		Delete(&Memory{}).Error
 }
 
 // GetMemoryCount 获取记忆总数
-func (s *Store) GetMemoryCount(ctx context.Context, userID string) (int64, error) {
+func (s *Store) GetMemoryCount(ctx context.Context, userID string, agentID uint) (int64, error) {
 	var count int64
 
 	err := s.db.WithContext(ctx).
 		Model(&Memory{}).
-		Where("user_id = ?", userID).
+		Where("user_id = ? AND agent_id = ?", userID, agentID).
 		Count(&count).Error
 
 	return count, err
 }
 
 // ExportMemories 导出所有记忆为 JSON
-func (s *Store) ExportMemories(ctx context.Context, userID string) (string, error) {
+func (s *Store) ExportMemories(ctx context.Context, userID string, agentID uint) (string, error) {
 	var memories []Memory
 
 	err := s.db.WithContext(ctx).
-		Where("user_id = ?", userID).
+		Where("user_id = ? AND agent_id = ?", userID, agentID).
 		Order("updated_at DESC").
 		Find(&memories).Error
 

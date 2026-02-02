@@ -17,13 +17,13 @@ import (
 
 // Orchestrator 编排器接口
 type Orchestrator interface {
-	ProcessMessage(ctx context.Context, userID string, userText string, conversationHistory string, systemPrompt string) (agent.Output, error)
-	ProcessMessageStream(ctx context.Context, userID string, userText string, conversationHistory string, systemPrompt string, callback func(string) error) (agent.Output, error)
+	ProcessMessage(ctx context.Context, userID string, agentID uint, userText string, conversationHistory string, systemPrompt string) (agent.Output, error)
+	ProcessMessageStream(ctx context.Context, userID string, agentID uint, userText string, conversationHistory string, systemPrompt string, callback func(string) error) (agent.Output, error)
 	GetConfig() *config.Config
 	GetStore() *memory.Store
-	GetChatHistory(ctx context.Context, userID string, limit, offset int) ([]memory.ChatMessage, error)
-	GetChatHistoryAfterID(ctx context.Context, userID string, afterID uint, limit int) ([]memory.ChatMessage, error)
-	GetChatSessions(ctx context.Context, userID string) ([]memory.ChatSession, error)
+	GetChatHistory(ctx context.Context, userID string, agentID uint, limit, offset int) ([]memory.ChatMessage, error)
+	GetChatHistoryAfterID(ctx context.Context, userID string, agentID uint, afterID uint, limit int) ([]memory.ChatMessage, error)
+	GetChatSessions(ctx context.Context, userID string, agentID uint) ([]memory.ChatSession, error)
 }
 
 // orchestrator 编排器，负责协调各个组件
@@ -69,24 +69,25 @@ func (o *orchestrator) GetStore() *memory.Store {
 }
 
 // GetChatHistory 获取聊天记录
-func (o *orchestrator) GetChatHistory(ctx context.Context, userID string, limit, offset int) ([]memory.ChatMessage, error) {
-	return o.memStore.GetChatHistory(ctx, userID, limit, offset)
+func (o *orchestrator) GetChatHistory(ctx context.Context, userID string, agentID uint, limit, offset int) ([]memory.ChatMessage, error) {
+	return o.memStore.GetChatHistory(ctx, userID, agentID, limit, offset)
 }
 
 // GetChatHistoryAfterID 获取指定消息ID之后的聊天记录
-func (o *orchestrator) GetChatHistoryAfterID(ctx context.Context, userID string, afterID uint, limit int) ([]memory.ChatMessage, error) {
-	return o.memStore.GetChatHistoryAfterID(ctx, userID, afterID, limit)
+func (o *orchestrator) GetChatHistoryAfterID(ctx context.Context, userID string, agentID uint, afterID uint, limit int) ([]memory.ChatMessage, error) {
+	return o.memStore.GetChatHistoryAfterID(ctx, userID, agentID, afterID, limit)
 }
 
 // GetChatSessions 获取聊天会话列表
-func (o *orchestrator) GetChatSessions(ctx context.Context, userID string) ([]memory.ChatSession, error) {
-	return o.memStore.GetChatSessions(ctx, userID)
+func (o *orchestrator) GetChatSessions(ctx context.Context, userID string, agentID uint) ([]memory.ChatSession, error) {
+	return o.memStore.GetChatSessions(ctx, userID, agentID)
 }
 
 // ProcessMessage 处理用户消息
 func (o *orchestrator) ProcessMessage(
 	ctx context.Context,
 	userID string,
+	agentID uint,
 	userText string,
 	conversationHistory string,
 	systemPrompt string,
@@ -97,7 +98,7 @@ func (o *orchestrator) ProcessMessage(
 	memoryText := ""
 	if o.shouldLoadMemory(userText) {
 		var err error
-		structuredText, semanticDocs, err = o.retrieveMemories(ctx, userID, userText)
+		structuredText, semanticDocs, err = o.retrieveMemories(ctx, userID, agentID, userText)
 		if err != nil {
 			if o.config.Base.Debug {
 				log.Printf("[DEBUG] 按需记忆检索失败: %v", err)
@@ -136,7 +137,7 @@ func (o *orchestrator) ProcessMessage(
 
 		// 注意：这里传入0作为lastMessageID，因为压缩发生在保存新消息之前
 		// 实际的LastMessageID会在保存消息后更新
-		compressed, err := CompressContextIncremental(ctx, o.llmClient, o.memStore, userID, conversationHistory, 0, compressorModel, 200)
+		compressed, err := CompressContextIncremental(ctx, o.llmClient, o.memStore, userID, agentID, conversationHistory, 0, compressorModel, 200)
 		if err != nil {
 			if o.config.Base.Debug {
 				log.Printf("[DEBUG] 增量压缩失败: %v，使用原始上下文", err)
@@ -151,7 +152,7 @@ func (o *orchestrator) ProcessMessage(
 		}
 	} else {
 		// 未达到压缩阈值，使用上次压缩的上下文 + 加载的历史作为Agent输入
-		lastCompressed, err := o.memStore.GetCompressedContext(ctx, userID)
+		lastCompressed, err := o.memStore.GetCompressedContext(ctx, userID, agentID)
 		if err == nil && lastCompressed.CompressedText != "" {
 			// 有上次的压缩结果，追加加载的历史作为上下文
 			compressedContext = lastCompressed.CompressedText + "\n\n" + conversationHistory
@@ -183,18 +184,18 @@ func (o *orchestrator) ProcessMessage(
 
 	// 保存聊天记录并获取消息ID
 	sessionID := fmt.Sprintf("%s_%d", userID, time.Now().Unix())
-	_, err = o.memStore.SaveChatMessage(ctx, userID, "user", userText, sessionID)
+	_, err = o.memStore.SaveChatMessage(ctx, userID, "user", userText, sessionID, agentID)
 	if err != nil && o.config.Base.Debug {
 		log.Printf("[DEBUG] 保存用户消息失败: %v", err)
 	}
-	assistantMsgID, err := o.memStore.SaveChatMessage(ctx, userID, "assistant", output.Response, sessionID)
+	assistantMsgID, err := o.memStore.SaveChatMessage(ctx, userID, "assistant", output.Response, sessionID, agentID)
 	if err != nil && o.config.Base.Debug {
 		log.Printf("[DEBUG] 保存助手响应失败: %v", err)
 	}
 
 	// 更新压缩上下文的LastMessageID
 	if assistantMsgID > 0 {
-		lastCompressed, err := o.memStore.GetCompressedContext(ctx, userID)
+		lastCompressed, err := o.memStore.GetCompressedContext(ctx, userID, agentID)
 		if err == nil {
 			// 如果未触发压缩，需要追加本次对话到压缩上下文
 			if !shouldCompress {
@@ -219,6 +220,7 @@ func (o *orchestrator) ProcessMessage(
 			// 如果没有压缩上下文但触发了压缩，创建一个新的
 			newCompressed := &memory.CompressedContext{
 				UserID:         userID,
+				AgentID:        agentID,
 				CompressedText: compressedContext,
 				LastMessageID:  assistantMsgID,
 			}
@@ -237,7 +239,7 @@ func (o *orchestrator) ProcessMessage(
 				bgCtx, cancel := context.WithTimeout(context.Background(), time.Duration(o.config.Base.Timeout)*time.Second)
 				defer cancel()
 
-				if err := o.extractAndStoreMemories(bgCtx, userID, conversationHistory, userText, output.Response); err != nil {
+				if err := o.extractAndStoreMemories(bgCtx, userID, agentID, conversationHistory, userText, output.Response); err != nil {
 					if o.config.Base.Debug {
 						log.Printf("[DEBUG] 异步提取记忆失败: %v", err)
 					}
@@ -257,6 +259,7 @@ func (o *orchestrator) ProcessMessage(
 func (o *orchestrator) ProcessMessageStream(
 	ctx context.Context,
 	userID string,
+	agentID uint,
 	userText string,
 	conversationHistory string,
 	systemPrompt string,
@@ -268,7 +271,7 @@ func (o *orchestrator) ProcessMessageStream(
 	memoryText := ""
 	if o.shouldLoadMemory(userText) {
 		var err error
-		structuredText, semanticDocs, err = o.retrieveMemories(ctx, userID, userText)
+		structuredText, semanticDocs, err = o.retrieveMemories(ctx, userID, agentID, userText)
 		if err != nil {
 			if o.config.Base.Debug {
 				log.Printf("[DEBUG] 按需记忆检索失败: %v", err)
@@ -306,7 +309,7 @@ func (o *orchestrator) ProcessMessageStream(
 
 		// 注意：这里传入0作为lastMessageID，因为压缩发生在保存新消息之前
 		// 实际的LastMessageID会在保存消息后更新
-		compressed, err := CompressContextIncremental(ctx, o.llmClient, o.memStore, userID, conversationHistory, 0, compressorModel, 200)
+		compressed, err := CompressContextIncremental(ctx, o.llmClient, o.memStore, userID, agentID, conversationHistory, 0, compressorModel, 200)
 		if err != nil {
 			if o.config.Base.Debug {
 				log.Printf("[DEBUG] 增量压缩失败: %v，使用原始上下文", err)
@@ -319,7 +322,7 @@ func (o *orchestrator) ProcessMessageStream(
 		}
 	} else {
 		// 未达到压缩阈值，使用上次压缩的上下文 + 加载的历史作为Agent输入
-		lastCompressed, err := o.memStore.GetCompressedContext(ctx, userID)
+		lastCompressed, err := o.memStore.GetCompressedContext(ctx, userID, agentID)
 		if err == nil && lastCompressed.CompressedText != "" {
 			// 有上次的压缩结果，追加加载的历史作为上下文
 			compressedContext = lastCompressed.CompressedText + "\n\n" + conversationHistory
@@ -351,18 +354,18 @@ func (o *orchestrator) ProcessMessageStream(
 
 	// 5. 保存聊天记录并获取消息ID
 	sessionID := fmt.Sprintf("%s_%d", userID, time.Now().Unix())
-	_, err = o.memStore.SaveChatMessage(ctx, userID, "user", userText, sessionID)
+	_, err = o.memStore.SaveChatMessage(ctx, userID, "user", userText, sessionID, agentID)
 	if err != nil && o.config.Base.Debug {
 		log.Printf("[DEBUG] 保存用户消息失败: %v", err)
 	}
-	assistantMsgID, err := o.memStore.SaveChatMessage(ctx, userID, "assistant", output.Response, sessionID)
+	assistantMsgID, err := o.memStore.SaveChatMessage(ctx, userID, "assistant", output.Response, sessionID, agentID)
 	if err != nil && o.config.Base.Debug {
 		log.Printf("[DEBUG] 保存助手响应失败: %v", err)
 	}
 
 	// 更新压缩上下文的LastMessageID
 	if assistantMsgID > 0 {
-		lastCompressed, err := o.memStore.GetCompressedContext(ctx, userID)
+		lastCompressed, err := o.memStore.GetCompressedContext(ctx, userID, agentID)
 		if err == nil {
 			// 更新LastMessageID为最新的助手消息ID
 			lastCompressed.LastMessageID = assistantMsgID
@@ -393,7 +396,7 @@ func (o *orchestrator) ProcessMessageStream(
 				bgCtx, cancel := context.WithTimeout(context.Background(), time.Duration(o.config.Base.Timeout)*time.Second)
 				defer cancel()
 
-				if err := o.extractAndStoreMemories(bgCtx, userID, conversationHistory, userText, output.Response); err != nil {
+				if err := o.extractAndStoreMemories(bgCtx, userID, agentID, conversationHistory, userText, output.Response); err != nil {
 					if o.config.Base.Debug {
 						log.Printf("[DEBUG] 异步提取记忆失败: %v", err)
 					}
@@ -413,6 +416,7 @@ func (o *orchestrator) ProcessMessageStream(
 func (o *orchestrator) retrieveMemories(
 	ctx context.Context,
 	userID string,
+	agentID uint,
 	query string,
 ) (string, []rag.Doc, error) {
 	type result struct {
@@ -428,7 +432,7 @@ func (o *orchestrator) retrieveMemories(
 	go func() {
 		callCtx, cancel := context.WithTimeout(ctx, time.Duration(o.config.Base.Timeout)*time.Second)
 		defer cancel()
-		text, err := o.memStore.RenderStructuredMemory(callCtx, userID, 20)
+		text, err := o.memStore.RenderStructuredMemory(callCtx, userID, agentID, 20)
 		structuredCh <- result{structured: text, err: err}
 	}()
 
@@ -436,7 +440,7 @@ func (o *orchestrator) retrieveMemories(
 	go func() {
 		callCtx, cancel := context.WithTimeout(ctx, time.Duration(o.config.Base.Timeout)*time.Second)
 		defer cancel()
-		docs, err := o.vectorStore.SimilaritySearch(callCtx, userID, query, o.config.Storage.Qdrant.TopK)
+		docs, err := o.vectorStore.SimilaritySearch(callCtx, userID, agentID, query, o.config.Storage.Qdrant.TopK)
 		semanticCh <- result{semantic: docs, err: err}
 	}()
 
@@ -509,6 +513,7 @@ func (o *orchestrator) showContextStats(
 func (o *orchestrator) extractAndStoreMemories(
 	ctx context.Context,
 	userID string,
+	agentID uint,
 	conversationHistory string,
 	userText string,
 	assistantText string,
@@ -539,12 +544,12 @@ func (o *orchestrator) extractAndStoreMemories(
 	}
 
 	// 存储到 SQLite
-	if err := o.storeStructuredMemories(ctx, userID, memories); err != nil {
+	if err := o.storeStructuredMemories(ctx, userID, agentID, memories); err != nil {
 		return err
 	}
 
 	// 存储到 Qdrant
-	if err := o.storeSemanticMemories(ctx, userID, memories); err != nil {
+	if err := o.storeSemanticMemories(ctx, userID, agentID, memories); err != nil {
 		return err
 	}
 
@@ -555,12 +560,13 @@ func (o *orchestrator) extractAndStoreMemories(
 func (o *orchestrator) storeStructuredMemories(
 	ctx context.Context,
 	userID string,
+	agentID uint,
 	memories []memory.ExtractedMemory,
 ) error {
 	callCtx, cancel := context.WithTimeout(ctx, time.Duration(o.config.Base.Timeout)*time.Second)
 	defer cancel()
 
-	if err := o.memStore.UpsertExtractedMemories(callCtx, userID, memories); err != nil {
+	if err := o.memStore.UpsertExtractedMemories(callCtx, userID, agentID, memories); err != nil {
 		if o.config.Base.Debug {
 			log.Printf("写入 SQLite 失败: %v\n", err)
 		}
@@ -577,6 +583,7 @@ func (o *orchestrator) storeStructuredMemories(
 func (o *orchestrator) storeSemanticMemories(
 	ctx context.Context,
 	userID string,
+	agentID uint,
 	memories []memory.ExtractedMemory,
 ) error {
 	var vectorTexts []string
@@ -611,7 +618,7 @@ func (o *orchestrator) storeSemanticMemories(
 	callCtx, cancel := context.WithTimeout(ctx, time.Duration(o.config.Base.Timeout)*time.Second)
 	defer cancel()
 
-	if err := o.vectorStore.UpsertTexts(callCtx, userID, vectorTexts, ""); err != nil {
+	if err := o.vectorStore.UpsertTexts(callCtx, userID, agentID, vectorTexts, ""); err != nil {
 		if o.config.Base.Debug {
 			log.Printf("写入 Qdrant 失败: %v\n", err)
 		}

@@ -143,20 +143,20 @@ func (s *ChatService) HandleChat(c echo.Context) error {
 	println("加载历史聊天记录作为上下文")
 
 	// 检查是否有压缩上下文
-	compressedCtx, err := s.orch.GetStore().GetCompressedContext(c.Request().Context(), userID)
+	compressedCtx, err := s.orch.GetStore().GetCompressedContext(c.Request().Context(), userID, agentID)
 	var historyMessages []memory.ChatMessage
 
 	if err == nil && compressedCtx.LastMessageID > 0 {
 		// 有压缩上下文，只加载新消息
 		println("发现压缩上下文，LastMessageID:", compressedCtx.LastMessageID)
-		historyMessages, err = s.orch.GetChatHistoryAfterID(c.Request().Context(), userID, compressedCtx.LastMessageID, 20)
+		historyMessages, err = s.orch.GetChatHistoryAfterID(c.Request().Context(), userID, agentID, compressedCtx.LastMessageID, 20)
 		if err != nil {
 			println("Failed to load chat history after ID:", err.Error())
 		}
 	} else {
 		// 没有压缩上下文，加载所有历史消息
 		println("没有压缩上下文，加载所有历史消息")
-		historyMessages, err = s.orch.GetChatHistory(c.Request().Context(), userID, 20, 0)
+		historyMessages, err = s.orch.GetChatHistory(c.Request().Context(), userID, agentID, 20, 0)
 		if err != nil {
 			println("Failed to load chat history:", err.Error())
 		}
@@ -179,7 +179,7 @@ func (s *ChatService) HandleChat(c echo.Context) error {
 	conversationContext := windowMem.String()
 
 	// 处理消息
-	output, err := s.orch.ProcessMessage(context.Background(), userID, req.Message, conversationContext, prompt)
+	output, err := s.orch.ProcessMessage(context.Background(), userID, agentID, req.Message, conversationContext, prompt)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to process message: " + err.Error()})
 	}
@@ -271,20 +271,20 @@ func (s *ChatService) HandleChatStream(c echo.Context) error {
 	windowMem := memory.NewWindowMemory(10)
 
 	// 检查是否有压缩上下文
-	compressedCtx, err := s.orch.GetStore().GetCompressedContext(c.Request().Context(), userID)
+	compressedCtx, err := s.orch.GetStore().GetCompressedContext(c.Request().Context(), userID, agentID)
 	var historyMessages []memory.ChatMessage
 
 	if err == nil && compressedCtx.LastMessageID > 0 {
 		// 有压缩上下文，只加载新消息
 		println("发现压缩上下文，LastMessageID:", compressedCtx.LastMessageID)
-		historyMessages, err = s.orch.GetChatHistoryAfterID(c.Request().Context(), userID, compressedCtx.LastMessageID, 20)
+		historyMessages, err = s.orch.GetChatHistoryAfterID(c.Request().Context(), userID, agentID, compressedCtx.LastMessageID, 20)
 		if err != nil {
 			println("Failed to load chat history after ID:", err.Error())
 		}
 	} else {
 		// 没有压缩上下文，加载所有历史消息
 		println("没有压缩上下文，加载所有历史消息")
-		historyMessages, err = s.orch.GetChatHistory(c.Request().Context(), userID, 20, 0)
+		historyMessages, err = s.orch.GetChatHistory(c.Request().Context(), userID, agentID, 20, 0)
 		if err != nil {
 			println("Failed to load chat history:", err.Error())
 		}
@@ -311,13 +311,16 @@ func (s *ChatService) HandleChatStream(c echo.Context) error {
 		if _, err := c.Response().Write([]byte("data: " + chunk + "\n\n")); err != nil {
 			return err
 		}
-		c.Response().Flush()
+		// 强制刷新缓冲区，确保立即发送
+		if flusher, ok := c.Response().Writer.(http.Flusher); ok {
+			flusher.Flush()
+		}
 		return nil
 	}
 	println("处理消息")
 	// 处理消息（流式）
 	println(c.Request().Context())
-	_, err = s.orch.ProcessMessageStream(c.Request().Context(), userID, req.Message, conversationContext, prompt, streamCallback)
+	_, err = s.orch.ProcessMessageStream(c.Request().Context(), userID, agentID, req.Message, conversationContext, prompt, streamCallback)
 	if err != nil {
 		println("处理消息失败")
 		println(err.Error())
@@ -328,7 +331,9 @@ func (s *ChatService) HandleChatStream(c echo.Context) error {
 	if _, err := c.Response().Write([]byte("data: [DONE]\n\n")); err != nil {
 		return nil
 	}
-	c.Response().Flush()
+	if flusher, ok := c.Response().Writer.(http.Flusher); ok {
+		flusher.Flush()
+	}
 
 	return nil
 }
@@ -349,8 +354,16 @@ func (s *ChatService) GetChatHistory(c echo.Context) error {
 	}
 
 	// 设置默认值
+	agentID := uint(1)
 	limit := 50
 	offset := 0
+
+	// 尝试解析 agent_id 参数
+	if agentIDParam := c.QueryParam("agent_id"); agentIDParam != "" {
+		if aid, err := strconv.ParseUint(agentIDParam, 10, 32); err == nil && aid > 0 {
+			agentID = uint(aid)
+		}
+	}
 
 	// 尝试解析 limit 和 offset 参数
 	if limitParam := c.QueryParam("limit"); limitParam != "" {
@@ -366,7 +379,7 @@ func (s *ChatService) GetChatHistory(c echo.Context) error {
 	}
 
 	// 获取聊天记录
-	messages, err := s.orch.GetChatHistory(c.Request().Context(), userID, limit, offset)
+	messages, err := s.orch.GetChatHistory(c.Request().Context(), userID, agentID, limit, offset)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to get chat history: " + err.Error()})
 	}
@@ -388,7 +401,7 @@ func (s *ChatService) GetChatSessions(c echo.Context) error {
 	}
 
 	// 获取聊天会话列表
-	sessions, err := s.orch.GetChatSessions(c.Request().Context(), userID)
+	sessions, err := s.orch.GetChatSessions(c.Request().Context(), userID, 1)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to get chat sessions: " + err.Error()})
 	}

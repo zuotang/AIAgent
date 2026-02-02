@@ -95,7 +95,7 @@ func (s *KnowledgeServiceImpl) IngestText(ctx context.Context, req IngestTextReq
 	}
 
 	// 录入文本分块
-	return s.store.UpsertTexts(ctx, req.UserID, chunks, req.FileName)
+	return s.store.UpsertTexts(ctx, req.UserID, 1, chunks, req.FileName)
 }
 
 // Query 实现知识库查询功能
@@ -105,13 +105,13 @@ func (s *KnowledgeServiceImpl) Query(ctx context.Context, req QueryRequest) ([]r
 		req.Limit = 5
 	}
 
-	return s.store.SimilaritySearch(ctx, req.UserID, req.Query, req.Limit)
+	return s.store.SimilaritySearch(ctx, req.UserID, 1, req.Query, req.Limit)
 }
 
 // List 实现知识库列表功能
 func (s *KnowledgeServiceImpl) List(ctx context.Context, userID string) ([]string, error) {
 	// 调用存储的 ListFiles 方法获取文件列表
-	return s.store.ListFiles(ctx, userID)
+	return s.store.ListFiles(ctx, userID, 1)
 }
 
 // HandleIngestFile 处理文件录入请求

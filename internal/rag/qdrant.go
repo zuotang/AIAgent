@@ -113,12 +113,12 @@ func (s *QdrantStore) ensureCollection(ctx context.Context, collection string, d
 	return nil
 }
 
-func (s *QdrantStore) SimilaritySearch(ctx context.Context, userID, query string, topK int) ([]Doc, error) {
+func (s *QdrantStore) SimilaritySearch(ctx context.Context, userID string, agentID uint, query string, topK int) ([]Doc, error) {
 	// 从集合搜索
-	return s.SimilaritySearchFromCollection(ctx, userID, query, topK, s.Collection)
+	return s.SimilaritySearchFromCollection(ctx, userID, agentID, query, topK, s.Collection)
 }
 
-func (s *QdrantStore) SimilaritySearchFromCollection(ctx context.Context, userID, query string, topK int, collection string) ([]Doc, error) {
+func (s *QdrantStore) SimilaritySearchFromCollection(ctx context.Context, userID string, agentID uint, query string, topK int, collection string) ([]Doc, error) {
 	vec, err := s.Embedder(ctx, query)
 	if err != nil {
 		return nil, err
@@ -134,6 +134,10 @@ func (s *QdrantStore) SimilaritySearchFromCollection(ctx context.Context, userID
 				map[string]any{
 					"key":   "user_id",
 					"match": map[string]any{"value": userID},
+				},
+				map[string]any{
+					"key":   "agent_id",
+					"match": map[string]any{"value": agentID},
 				},
 			},
 		},
@@ -177,7 +181,7 @@ func (s *QdrantStore) SimilaritySearchFromCollection(ctx context.Context, userID
 	return docs, nil
 }
 
-func (s *QdrantStore) UpsertTexts(ctx context.Context, userID string, texts []string, fileName string) error {
+func (s *QdrantStore) UpsertTexts(ctx context.Context, userID string, agentID uint, texts []string, fileName string) error {
 	for _, t := range texts {
 		if t == "" {
 			continue
@@ -191,6 +195,7 @@ func (s *QdrantStore) UpsertTexts(ctx context.Context, userID string, texts []st
 
 		payload := map[string]any{
 			"user_id":   userID,
+			"agent_id":  agentID,
 			"content":   t,
 			"file_name": fileName,
 			"timestamp": time.Now().Unix(),
@@ -259,7 +264,7 @@ func randomID() string {
 }
 
 // ListFiles 获取用户的知识库文件列表
-func (s *QdrantStore) ListFiles(ctx context.Context, userID string) ([]string, error) {
+func (s *QdrantStore) ListFiles(ctx context.Context, userID string, agentID uint) ([]string, error) {
 	// 使用 Qdrant 的 scroll API 来获取所有匹配的点
 	body := map[string]any{
 		"filter": map[string]any{
@@ -267,6 +272,10 @@ func (s *QdrantStore) ListFiles(ctx context.Context, userID string) ([]string, e
 				map[string]any{
 					"key":   "user_id",
 					"match": map[string]any{"value": userID},
+				},
+				map[string]any{
+					"key":   "agent_id",
+					"match": map[string]any{"value": agentID},
 				},
 			},
 		},
