@@ -316,6 +316,8 @@ func (s *Store) GetChatHistoryWithCursor(ctx context.Context, userID string, age
 	err := query.
 		Order("id DESC").
 		Limit(limit).
+		//需要将数据反转，因为数据库查询是倒序的
+
 		Find(&messages).Error
 
 	return messages, err
@@ -479,7 +481,7 @@ func (s *Store) IncrementAccessCount(ctx context.Context, userID string, agentID
 		Model(&Memory{}).
 		Where("user_id = ? AND agent_id = ? AND mtype = ? AND mkey = ? AND owner = ?", userID, agentID, mtype, mkey, owner).
 		Updates(map[string]interface{}{
-			"access_count":      gorm.Expr("access_count + 1"),
+			"access_count":     gorm.Expr("access_count + 1"),
 			"last_accessed_at": now,
 		}).Error
 }
