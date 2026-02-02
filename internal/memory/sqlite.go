@@ -285,7 +285,7 @@ func (s *Store) SaveChatMessage(ctx context.Context, userID, role, content, sess
 	return msg.ID, nil
 }
 
-// GetChatHistory 获取用户的聊天记录
+// GetChatHistory 获取用户的聊天记录（基于偏移量的分页，保留用于兼容性）
 func (s *Store) GetChatHistory(ctx context.Context, userID string, agentID uint, limit, offset int) ([]ChatMessage, error) {
 	var messages []ChatMessage
 
@@ -297,6 +297,38 @@ func (s *Store) GetChatHistory(ctx context.Context, userID string, agentID uint,
 		Find(&messages).Error
 
 	return messages, err
+}
+
+// GetChatHistoryWithCursor 获取用户的聊天记录（基于游标的分页）
+// beforeID: 获取此ID之前的消息（用于向前翻页），0表示从最新消息开始
+// limit: 每页返回的消息数量
+// 返回消息按ID倒序排列（最新的在前）
+func (s *Store) GetChatHistoryWithCursor(ctx context.Context, userID string, agentID uint, beforeID uint, limit int) ([]ChatMessage, error) {
+	var messages []ChatMessage
+	query := s.db.WithContext(ctx).
+		Where("user_id = ? AND agent_id = ?", userID, agentID)
+
+	// 如果指定了 beforeID，只获取 ID 小于该值的消息
+	if beforeID > 0 {
+		query = query.Where("id < ?", beforeID)
+	}
+
+	err := query.
+		Order("id DESC").
+		Limit(limit).
+		Find(&messages).Error
+
+	return messages, err
+}
+
+// GetChatHistoryCount 获取聊天记录总数
+func (s *Store) GetChatHistoryCount(ctx context.Context, userID string, agentID uint) (int64, error) {
+	var count int64
+	err := s.db.WithContext(ctx).
+		Model(&ChatMessage{}).
+		Where("user_id = ? AND agent_id = ?", userID, agentID).
+		Count(&count).Error
+	return count, err
 }
 
 // GetChatHistoryAfterID 获取指定消息ID之后的聊天记录
@@ -652,4 +684,39 @@ func (s *Store) GetActiveAgents(ctx context.Context) ([]Agent, error) {
 		Order("created_at DESC").
 		Find(&agents).Error
 	return agents, err
+}
+
+// ==================== Clear Data ====================
+
+// ClearChatHistory 清空指定用户和 Agent 的聊天记录
+func (s *Store) ClearChatHistory(ctx context.Context, userID string, agentID uint) error {
+	return s.db.WithContext(ctx).
+		Where("user_id = ? AND agent_id = ?", userID, agentID).
+		Delete(&ChatMessage{}).Error
+}
+
+// ClearMemories 清空指定用户和 Agent 的记忆
+func (s *Store) ClearMemories(ctx context.Context, userID string, agentID uint) error {
+	return s.db.WithContext(ctx).
+		Where("user_id = ? AND agent_id = ?", userID, agentID).
+		Delete(&Memory{}).Error
+}
+
+// ClearAllData 清空指定用户和 Agent 的所有数据（聊天记录、记忆、压缩上下文）
+func (s *Store) ClearAllData(ctx context.Context, userID string, agentID uint) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 清空聊天记录
+		if err := tx.Where("user_id = ? AND agent_id = ?", userID, agentID).Delete(&ChatMessage{}).Error; err != nil {
+			return err
+		}
+		// 清空记忆
+		if err := tx.Where("user_id = ? AND agent_id = ?", userID, agentID).Delete(&Memory{}).Error; err != nil {
+			return err
+		}
+		// 清空压缩上下文
+		if err := tx.Where("user_id = ? AND agent_id = ?", userID, agentID).Delete(&CompressedContext{}).Error; err != nil {
+			return err
+		}
+		return nil
+	})
 }

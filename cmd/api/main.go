@@ -124,6 +124,7 @@ func main() {
 	e.POST("/api/chat/stream", chatService.HandleChatStream)
 	e.GET("/api/chat/history", chatService.GetChatHistory)
 	e.GET("/api/chat/sessions", chatService.GetChatSessions)
+	e.POST("/api/chat/clear", chatService.HandleClearData)
 	log.Println("Chat routes registered")
 
 	// 知识库相关路由

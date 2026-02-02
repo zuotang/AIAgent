@@ -345,7 +345,21 @@ type GetChatHistoryRequest struct {
 	Offset int    `json:"offset" validate:"omitempty,min=0"`
 }
 
-// GetChatHistory 处理获取聊天记录请求
+// PaginationMeta 分页元数据
+type PaginationMeta struct {
+	Total      int64  `json:"total"`       // 总记录数
+	Limit      int    `json:"limit"`       // 每页数量
+	HasMore    bool   `json:"has_more"`    // 是否有更多数据
+	NextCursor *uint  `json:"next_cursor"` // 下一页的游标（最后一条消息的ID），null表示没有更多数据
+}
+
+// ChatHistoryResponse 聊天记录响应（带分页）
+type ChatHistoryResponse struct {
+	Messages   []memory.ChatMessage `json:"messages"`
+	Pagination PaginationMeta       `json:"pagination"`
+}
+
+// GetChatHistory 处理获取聊天记录请求（支持游标分页）
 func (s *ChatService) GetChatHistory(c echo.Context) error {
 	// 从 URL 查询字符串中获取参数
 	userID := c.QueryParam("user_id")
@@ -355,8 +369,8 @@ func (s *ChatService) GetChatHistory(c echo.Context) error {
 
 	// 设置默认值
 	agentID := uint(1)
-	limit := 50
-	offset := 0
+	limit := 20 // 默认每页20条
+	beforeID := uint(0) // 0表示从最新消息开始
 
 	// 尝试解析 agent_id 参数
 	if agentIDParam := c.QueryParam("agent_id"); agentIDParam != "" {
@@ -365,26 +379,57 @@ func (s *ChatService) GetChatHistory(c echo.Context) error {
 		}
 	}
 
-	// 尝试解析 limit 和 offset 参数
+	// 尝试解析 limit 参数
 	if limitParam := c.QueryParam("limit"); limitParam != "" {
-		if l, err := strconv.Atoi(limitParam); err == nil && l > 0 {
+		if l, err := strconv.Atoi(limitParam); err == nil && l > 0 && l <= 100 {
 			limit = l
 		}
 	}
 
-	if offsetParam := c.QueryParam("offset"); offsetParam != "" {
-		if o, err := strconv.Atoi(offsetParam); err == nil && o >= 0 {
-			offset = o
+	// 尝试解析 before_id 参数（游标分页）
+	if beforeIDParam := c.QueryParam("before_id"); beforeIDParam != "" {
+		if bid, err := strconv.ParseUint(beforeIDParam, 10, 32); err == nil {
+			beforeID = uint(bid)
 		}
 	}
 
-	// 获取聊天记录
-	messages, err := s.orch.GetChatHistory(c.Request().Context(), userID, agentID, limit, offset)
+	ctx := c.Request().Context()
+
+	// 获取总数
+	total, err := s.orch.GetChatHistoryCount(ctx, userID, agentID)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to get chat history count: " + err.Error()})
+	}
+
+	// 获取聊天记录（使用游标分页）
+	messages, err := s.orch.GetChatHistoryWithCursor(ctx, userID, agentID, beforeID, limit+1) // 多取一条用于判断是否有更多
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to get chat history: " + err.Error()})
 	}
 
-	return c.JSON(http.StatusOK, messages)
+	// 判断是否有更多数据
+	hasMore := len(messages) > limit
+	var nextCursor *uint
+	if hasMore {
+		// 移除多取的那一条
+		messages = messages[:limit]
+		// 设置下一页的游标为最后一条消息的ID
+		lastID := messages[len(messages)-1].ID
+		nextCursor = &lastID
+	}
+
+	// 构造响应
+	response := ChatHistoryResponse{
+		Messages: messages,
+		Pagination: PaginationMeta{
+			Total:      total,
+			Limit:      limit,
+			HasMore:    hasMore,
+			NextCursor: nextCursor,
+		},
+	}
+
+	return c.JSON(http.StatusOK, response)
 }
 
 // GetChatSessionsRequest 获取聊天会话列表请求
@@ -407,4 +452,64 @@ func (s *ChatService) GetChatSessions(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, sessions)
+}
+
+// ClearDataRequest 清空数据请求
+type ClearDataRequest struct {
+	UserID  string `json:"user_id" validate:"required"`
+	AgentID uint   `json:"agent_id" validate:"required"`
+}
+
+// ClearDataResponse 清空数据响应
+type ClearDataResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+// HandleClearData 处理清空历史记录和记忆请求
+func (s *ChatService) HandleClearData(c echo.Context) error {
+	var req ClearDataRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error":   "Invalid request",
+			"message": err.Error(),
+			"details": "Failed to parse JSON request body",
+		})
+	}
+
+	// 验证必填字段
+	if req.UserID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error":   "Validation failed",
+			"message": "user_id field is required",
+		})
+	}
+
+	if req.AgentID == 0 {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error":   "Validation failed",
+			"message": "agent_id field is required and must be greater than 0",
+		})
+	}
+
+	ctx := c.Request().Context()
+
+	// 清空 SQLite 中的数据（聊天记录、记忆、压缩上下文）
+	if err := s.orch.GetStore().ClearAllData(ctx, req.UserID, req.AgentID); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error":   "Failed to clear data",
+			"message": err.Error(),
+		})
+	}
+
+	// 清空 Qdrant 中的向量数据
+	if err := s.orch.GetVectorStore().DeletePointsByFilter(ctx, req.UserID, req.AgentID); err != nil {
+		// 向量删除失败不应该阻止整个操作，记录错误但继续
+		println("Warning: Failed to delete vectors from Qdrant:", err.Error())
+	}
+
+	return c.JSON(http.StatusOK, ClearDataResponse{
+		Success: true,
+		Message: fmt.Sprintf("Successfully cleared all data for user_id=%s and agent_id=%d", req.UserID, req.AgentID),
+	})
 }

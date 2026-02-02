@@ -21,7 +21,10 @@ type Orchestrator interface {
 	ProcessMessageStream(ctx context.Context, userID string, agentID uint, userText string, conversationHistory string, systemPrompt string, callback func(string) error) (agent.Output, error)
 	GetConfig() *config.Config
 	GetStore() *memory.Store
+	GetVectorStore() *rag.QdrantStore
 	GetChatHistory(ctx context.Context, userID string, agentID uint, limit, offset int) ([]memory.ChatMessage, error)
+	GetChatHistoryWithCursor(ctx context.Context, userID string, agentID uint, beforeID uint, limit int) ([]memory.ChatMessage, error)
+	GetChatHistoryCount(ctx context.Context, userID string, agentID uint) (int64, error)
 	GetChatHistoryAfterID(ctx context.Context, userID string, agentID uint, afterID uint, limit int) ([]memory.ChatMessage, error)
 	GetChatSessions(ctx context.Context, userID string, agentID uint) ([]memory.ChatSession, error)
 }
@@ -68,9 +71,24 @@ func (o *orchestrator) GetStore() *memory.Store {
 	return o.memStore
 }
 
+// GetVectorStore 获取向量存储实例
+func (o *orchestrator) GetVectorStore() *rag.QdrantStore {
+	return o.vectorStore
+}
+
 // GetChatHistory 获取聊天记录
 func (o *orchestrator) GetChatHistory(ctx context.Context, userID string, agentID uint, limit, offset int) ([]memory.ChatMessage, error) {
 	return o.memStore.GetChatHistory(ctx, userID, agentID, limit, offset)
+}
+
+// GetChatHistoryWithCursor 获取聊天记录（基于游标的分页）
+func (o *orchestrator) GetChatHistoryWithCursor(ctx context.Context, userID string, agentID uint, beforeID uint, limit int) ([]memory.ChatMessage, error) {
+	return o.memStore.GetChatHistoryWithCursor(ctx, userID, agentID, beforeID, limit)
+}
+
+// GetChatHistoryCount 获取聊天记录总数
+func (o *orchestrator) GetChatHistoryCount(ctx context.Context, userID string, agentID uint) (int64, error) {
+	return o.memStore.GetChatHistoryCount(ctx, userID, agentID)
 }
 
 // GetChatHistoryAfterID 获取指定消息ID之后的聊天记录

@@ -332,3 +332,40 @@ func (s *QdrantStore) ListFiles(ctx context.Context, userID string, agentID uint
 func NewStoreFromOllama(qdrantURL, apiKey, collection string, ollama *models.Client) *QdrantStore {
 	return NewQdrantStore(qdrantURL, apiKey, collection, ollama.Embed)
 }
+
+// DeletePointsByFilter 根据过滤条件删除向量点
+func (s *QdrantStore) DeletePointsByFilter(ctx context.Context, userID string, agentID uint) error {
+	body := map[string]any{
+		"filter": map[string]any{
+			"must": []any{
+				map[string]any{
+					"key":   "user_id",
+					"match": map[string]any{"value": userID},
+				},
+				map[string]any{
+					"key":   "agent_id",
+					"match": map[string]any{"value": agentID},
+				},
+			},
+		},
+	}
+
+	b, _ := json.Marshal(body)
+	url := s.BaseURL + "/collections/" + s.Collection + "/points/delete"
+	resp, err := s.doWithRetry(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(b))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		return req, nil
+	}, 3)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("delete points http %d", resp.StatusCode)
+	}
+	return nil
+}
