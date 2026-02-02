@@ -167,9 +167,9 @@ func (s *ChatService) HandleChat(c echo.Context) error {
 		for i := len(historyMessages) - 1; i >= 0; i-- {
 			msg := historyMessages[i]
 			// 找到成对的 user 和 assistant 消息
-			if i > 0 && msg.Role == "assistant" && historyMessages[i-1].Role == "user" {
-				windowMem.Add(historyMessages[i-1].Content, msg.Content)
-				i-- // 跳过已处理的 user 消息
+			if i > 0 && msg.Role == "user" && historyMessages[i-1].Role == "assistant" {
+				windowMem.Add(msg.Content, historyMessages[i-1].Content)
+				i-- // 跳过已处理的 assistant 消息
 			}
 		}
 		println("已加载", windowMem.Size(), "轮历史对话")
@@ -294,8 +294,8 @@ func (s *ChatService) HandleChatStream(c echo.Context) error {
 	if len(historyMessages) > 0 {
 		for i := len(historyMessages) - 1; i >= 0; i-- {
 			msg := historyMessages[i]
-			if i > 0 && msg.Role == "assistant" && historyMessages[i-1].Role == "user" {
-				windowMem.Add(historyMessages[i-1].Content, msg.Content)
+			if i > 0 && msg.Role == "user" && historyMessages[i-1].Role == "assistant" {
+				windowMem.Add(msg.Content, historyMessages[i-1].Content)
 				i--
 			}
 		}
