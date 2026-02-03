@@ -14,6 +14,7 @@ import (
 // IngestRequest 录入请求结构
 type IngestRequest struct {
 	UserID       string `json:"user_id" validate:"required"`
+	AgentID      uint   `json:"agent_id"` // Agent ID，默认为1
 	Path         string `json:"path" validate:"required"`
 	ChunkSize    int    `json:"chunk_size"`
 	ChunkOverlap int    `json:"chunk_overlap"`
@@ -22,6 +23,7 @@ type IngestRequest struct {
 // IngestTextRequest 文本录入请求结构
 type IngestTextRequest struct {
 	UserID       string `json:"user_id" validate:"required"`
+	AgentID      uint   `json:"agent_id"` // Agent ID，默认为1
 	Text         string `json:"text" validate:"required"`
 	FileName     string `json:"file_name"`
 	ChunkSize    int    `json:"chunk_size"`
@@ -30,9 +32,10 @@ type IngestTextRequest struct {
 
 // QueryRequest 查询请求结构
 type QueryRequest struct {
-	UserID      string  `json:"user_id" validate:"required"`
-	Query       string  `json:"query" validate:"required"`
-	Limit       int     `json:"limit"`
+	UserID         string  `json:"user_id" validate:"required"`
+	AgentID        uint    `json:"agent_id"` // Agent ID，默认为1
+	Query          string  `json:"query" validate:"required"`
+	Limit          int     `json:"limit"`
 	ScoreThreshold float64 `json:"score_threshold"`
 }
 
@@ -66,20 +69,34 @@ func NewKnowledgeService(ingestor *rag.Ingestor, store *rag.QdrantStore) Knowled
 
 // IngestFile 实现文件录入功能
 func (s *KnowledgeServiceImpl) IngestFile(ctx context.Context, req IngestRequest) error {
-	// 创建临时录入器，使用请求中的 UserID
+	// 设置默认 AgentID
+	if req.AgentID == 0 {
+		req.AgentID = 1
+	}
+	// 创建临时录入器，使用请求中的 UserID 和 AgentID
 	tempIngestor := rag.NewIngestor(s.store, req.ChunkSize, req.ChunkOverlap, rag.ChunkingStrategyTokens, req.UserID)
+	tempIngestor.SetAgentID(req.AgentID)
 	return tempIngestor.IngestFile(ctx, req.Path)
 }
 
 // IngestDirectory 实现目录录入功能
 func (s *KnowledgeServiceImpl) IngestDirectory(ctx context.Context, req IngestRequest) error {
-	// 创建临时录入器，使用请求中的 UserID
+	// 设置默认 AgentID
+	if req.AgentID == 0 {
+		req.AgentID = 1
+	}
+	// 创建临时录入器，使用请求中的 UserID 和 AgentID
 	tempIngestor := rag.NewIngestor(s.store, req.ChunkSize, req.ChunkOverlap, rag.ChunkingStrategyTokens, req.UserID)
+	tempIngestor.SetAgentID(req.AgentID)
 	return tempIngestor.IngestDirectory(ctx, req.Path)
 }
 
 // IngestText 实现文本录入功能
 func (s *KnowledgeServiceImpl) IngestText(ctx context.Context, req IngestTextRequest) error {
+	// 设置默认 AgentID
+	if req.AgentID == 0 {
+		req.AgentID = 1
+	}
 	// 设置默认值
 	if req.ChunkSize == 0 {
 		req.ChunkSize = 1000
@@ -95,7 +112,7 @@ func (s *KnowledgeServiceImpl) IngestText(ctx context.Context, req IngestTextReq
 	}
 
 	// 录入文本分块
-	return s.store.UpsertTexts(ctx, req.UserID, 1, chunks, req.FileName)
+	return s.store.UpsertTexts(ctx, req.UserID, req.AgentID, chunks, req.FileName)
 }
 
 // Query 实现知识库查询功能
@@ -104,8 +121,11 @@ func (s *KnowledgeServiceImpl) Query(ctx context.Context, req QueryRequest) ([]r
 	if req.Limit == 0 {
 		req.Limit = 5
 	}
+	if req.AgentID == 0 {
+		req.AgentID = 1
+	}
 
-	return s.store.SimilaritySearch(ctx, req.UserID, 1, req.Query, req.Limit)
+	return s.store.SimilaritySearch(ctx, req.UserID, req.AgentID, req.Query, req.Limit)
 }
 
 // List 实现知识库列表功能

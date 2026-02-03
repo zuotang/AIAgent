@@ -23,14 +23,15 @@ const (
 
 // Ingestor 表示知识库录入器
 type Ingestor struct {
-	store          *QdrantStore
-	ChunkSize      int           // 分块大小（Token）
-	ChunkOverlap   int           // 分块重叠（Token）
+	store            *QdrantStore
+	ChunkSize        int              // 分块大小（Token）
+	ChunkOverlap     int              // 分块重叠（Token）
 	ChunkingStrategy ChunkingStrategy // 分块策略
-	UserID         string
-	MaxRetries     int
-	Concurrency    int
-	cache          *utils.Cache
+	UserID           string
+	AgentID          uint   // Agent ID，用于隔离不同 agent 的知识
+	MaxRetries       int
+	Concurrency      int
+	cache            *utils.Cache
 }
 
 // NewIngestor 创建一个新的知识库录入器
@@ -48,15 +49,21 @@ func NewIngestor(store *QdrantStore, chunkSize, chunkOverlap int, strategy Chunk
 	}
 
 	return &Ingestor{
-		store:          store,
-		ChunkSize:      chunkSize,
-		ChunkOverlap:   chunkOverlap,
+		store:            store,
+		ChunkSize:        chunkSize,
+		ChunkOverlap:     chunkOverlap,
 		ChunkingStrategy: strategy,
-		UserID:         userID,
-		MaxRetries:     3,
-		Concurrency:    4,
-		cache:          cache,
+		UserID:           userID,
+		AgentID:          1, // 默认 Agent ID
+		MaxRetries:       3,
+		Concurrency:      4,
+		cache:            cache,
 	}
+}
+
+// SetAgentID 设置 Agent ID
+func (i *Ingestor) SetAgentID(agentID uint) {
+	i.AgentID = agentID
 }
 
 // IngestFile 录入单个文件到知识库
@@ -204,9 +211,11 @@ func (i *Ingestor) ingestChunk(ctx context.Context, chunk *utils.Chunk) error {
 
 		// 创建元数据
 		payload := map[string]any{
-			"user_id": i.UserID,
-			"text":    chunk.Content,
-			"ts":      time.Now().Format(time.RFC3339),
+			"user_id":  i.UserID,
+			"agent_id": i.AgentID, // 添加 agent_id 以支持过滤
+			"text":     chunk.Content,
+			"type":     "knowledge", // 标记为知识类型
+			"ts":       time.Now().Format(time.RFC3339),
 		}
 
 		// 添加分块元数据
