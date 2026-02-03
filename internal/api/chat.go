@@ -304,7 +304,7 @@ func (s *ChatService) HandleChatStream(c echo.Context) error {
 
 	// 仅使用历史对话作为上下文，当前用户消息单独走 Message 字段
 	conversationContext := windowMem.String()
-
+	println("上下文:", conversationContext)
 	println("流式回调")
 	// 流式回调
 	streamCallback := func(chunk string) error {
@@ -347,10 +347,10 @@ type GetChatHistoryRequest struct {
 
 // PaginationMeta 分页元数据
 type PaginationMeta struct {
-	Total      int64  `json:"total"`       // 总记录数
-	Limit      int    `json:"limit"`       // 每页数量
-	HasMore    bool   `json:"has_more"`    // 是否有更多数据
-	NextCursor *uint  `json:"next_cursor"` // 下一页的游标（最后一条消息的ID），null表示没有更多数据
+	Total      int64 `json:"total"`       // 总记录数
+	Limit      int   `json:"limit"`       // 每页数量
+	HasMore    bool  `json:"has_more"`    // 是否有更多数据
+	NextCursor *uint `json:"next_cursor"` // 下一页的游标（最后一条消息的ID），null表示没有更多数据
 }
 
 // ChatHistoryResponse 聊天记录响应（带分页）
@@ -369,7 +369,7 @@ func (s *ChatService) GetChatHistory(c echo.Context) error {
 
 	// 设置默认值
 	agentID := uint(1)
-	limit := 20 // 默认每页20条
+	limit := 20         // 默认每页20条
 	beforeID := uint(0) // 0表示从最新消息开始
 
 	// 尝试解析 agent_id 参数

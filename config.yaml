@@ -1,0 +1,111 @@
+# AI Agent 配置文件
+
+# 基本配置
+base:
+  provider: deepseek  # 主 LLM 提供商: ollama 或 deepseek
+  debug: true      # 调试模式
+  timeout: 60       # 超时时间（秒）
+
+# LLM 配置（用于主对话）
+llm:
+  # anthropic 配置
+  anthropic:
+    base_url: http://127.0.0.1:11434  # Claude API 基础 URL
+    api_key: ""  # 在这里填入你的 Claude API Key
+    chat_model: Rocinante-XU:12b # 聊天模型
+
+  # Ollama 配置
+  ollama:
+    base_url: http://127.0.0.1:11434  # Ollama 服务地址
+    #chat_model: Gemma-The-Writer:9B            # 聊天模型
+    chat_model: PsychosisU:9B            # 聊天模型
+    #chat_model: Llama3.3-Uncensored:8b             # 聊天模型
+
+  # DeepSeek 配置
+  deepseek:
+    base_url: https://api.deepseek.com/v1  # DeepSeek API 基础 URL
+    api_key: "sk-b42fde7257a649ac82b53c118d463dba"  # 在这里填入你的 DeepSeek API Key
+    chat_model: deepseek-chat             # 模型名称
+
+# Embedding 配置（独立配置，用于向量化）
+embedding:
+  provider: ollama  # embedding 提供商: ollama, openai, custom
+  base_url: http://127.0.0.1:11434  # Embedding 服务地址
+  model: nomic-embed-text  # Embedding 模型
+  api_key: ""  # API Key（如果需要）
+  # 高级配置
+  batch_size: 10  # 批量处理大小
+  dimensions: 0   # 向量维度（0 表示自动检测）
+
+# 记忆提取器配置（独立配置，用于从对话中提取结构化记忆）
+extractor:
+  provider: deepseek  # 提取器提供商: ollama, deepseek, custom（留空则使用主 LLM）
+  base_url: https://api.deepseek.com/v1  # 提取器服务地址
+  model: deepseek-chat       # 提取器模型（留空则使用主 chat_model）
+  api_key: "sk-b42fde7257a649ac82b53c118d463dba"  # API Key（如果需要）
+  # 提取器特定配置
+  temperature: 0.1  # 温度（提取任务建议低温度）
+  max_retries: 3    # 最大重试次数
+
+# 分类器配置（用于智能触发判断）
+classifier:
+  provider: ollama  # 分类器提供商: ollama, deepseek, custom
+  base_url: http://127.0.0.1:11434  # 分类器服务地址
+  model: GLM4.7:1B   # 分类器模型（建议使用小模型）
+  api_key: ""  # API Key（如果需要）
+  # 分类器特定配置
+  temperature: 0.0  # 温度（分类任务建议 0 温度）
+  timeout: 10       # 超时时间（秒，分类任务应该快速）
+
+# 存储配置
+storage:
+  # SQLite 数据库配置
+  database:
+    path: memory.db  # SQLite 数据库文件路径
+
+  # Qdrant 向量数据库配置
+  qdrant:
+    base_url: http://127.0.0.1:6333  # Qdrant 服务地址
+    api_key: "your_api_key_here"  # Qdrant API Key（可选，如果 Qdrant 启用了认证）
+    collection: memories  # 记忆集合名称
+    top_k: 6  # 语义检索返回的最大结果数
+
+# 服务配置
+services:
+  # API 服务配置
+  api:
+    port: 8686  # API 服务端口
+    host: 0.0.0.0  # 监听地址
+    cors_enabled: true  # 启用 CORS
+
+  # RAG 配置
+  rag:
+    chunk_size: 1000        # 分块大小
+    chunk_overlap: 200       # 分块重叠大小
+    chunking_strategy: tokens  # 分块策略: tokens, semantic
+    collection: knowledge      # 知识库集合名称
+
+# 记忆配置
+memory:
+  window_size: 8            # 短期记忆窗口大小（对话轮数）
+  enable_extractor: true    # 启用记忆提取器（写入长期记忆）
+  enable_smart_trigger: true  # 启用智能触发（节省 70-80% token）
+  trigger_method: llm  # 触发方法: keyword, llm, conservative
+  min_message_length: 10      # 最小消息长度
+  include_history_context: false  # 提取时包含历史上下文（false 避免重复提取）
+  # 记忆质量控制
+  min_confidence: 0.65  # 最小置信度（低于此值的记忆不会存储到向量库）
+  max_memories_per_extraction: 20  # 每次提取的最大记忆数
+
+# 知识库智能路由配置
+knowledge:
+  enable_routing: true  # 启用智能路由（使用小模型判断是否需要检索知识库）
+  top_k: 3              # 知识库检索返回的最大结果数
+  classifier_timeout: 100  # 分类器超时（毫秒，快速分类）
+
+# 性能配置
+performance:
+  max_concurrent_requests: 10  # 最大并发请求数
+  request_timeout: 120  # 请求超时（秒）
+  enable_cache: true    # 启用缓存
+  cache_ttl: 3600       # 缓存过期时间（秒）

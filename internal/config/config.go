@@ -17,6 +17,7 @@ type Config struct {
 	Storage     StorageConfig     `yaml:"storage"`
 	Services    ServicesConfig    `yaml:"services"`
 	Memory      MemoryConfig      `yaml:"memory"`
+	Knowledge   KnowledgeConfig   `yaml:"knowledge"`
 	Performance PerformanceConfig `yaml:"performance"`
 }
 
@@ -134,16 +135,21 @@ type DatabaseConfig struct {
 
 // MemoryConfig 记忆配置
 type MemoryConfig struct {
-	WindowSize                int    `yaml:"window_size"`                  // 短期记忆窗口大小
-	EnableExtractor           bool   `yaml:"enable_extractor"`             // 启用记忆提取器（写入长期记忆）
-	EnableSmartTrigger        bool   `yaml:"enable_smart_trigger"`         // 启用智能触发
-	TriggerMethod             string `yaml:"trigger_method"`               // 触发方法
-	MinMessageLength          int    `yaml:"min_message_length"`           // 最小消息长度
-	IncludeHistoryContext     bool   `yaml:"include_history_context"`      // 提取时包含历史上下文
-	MinConfidence             float64 `yaml:"min_confidence"`              // 最小置信度
-	MaxMemoriesPerExtraction  int    `yaml:"max_memories_per_extraction"`  // 每次提取的最大记忆数
-	OnDemandMinLength         int    `yaml:"on_demand_min_length"`         // 按需加载触发的最小消息长度
-	OnDemandKeywords          []string `yaml:"on_demand_keywords"`         // 按需加载关键词
+	WindowSize               int     `yaml:"window_size"`                 // 短期记忆窗口大小
+	EnableExtractor          bool    `yaml:"enable_extractor"`            // 启用记忆提取器（写入长期记忆）
+	EnableSmartTrigger       bool    `yaml:"enable_smart_trigger"`        // 启用智能触发
+	TriggerMethod            string  `yaml:"trigger_method"`              // 触发方法
+	MinMessageLength         int     `yaml:"min_message_length"`          // 最小消息长度
+	IncludeHistoryContext    bool    `yaml:"include_history_context"`     // 提取时包含历史上下文
+	MinConfidence            float64 `yaml:"min_confidence"`              // 最小置信度
+	MaxMemoriesPerExtraction int     `yaml:"max_memories_per_extraction"` // 每次提取的最大记忆数
+}
+
+// KnowledgeConfig 知识库配置
+type KnowledgeConfig struct {
+	EnableRouting     bool `yaml:"enable_routing"`      // 启用智能路由
+	TopK              int  `yaml:"top_k"`               // 检索数量
+	ClassifierTimeout int  `yaml:"classifier_timeout"`  // 分类器超时（毫秒）
 }
 
 // Load 从文件加载配置
@@ -305,16 +311,6 @@ func (c *Config) setDefaults() {
 	if c.Memory.MaxMemoriesPerExtraction == 0 {
 		c.Memory.MaxMemoriesPerExtraction = 20
 	}
-	if c.Memory.OnDemandMinLength == 0 {
-		c.Memory.OnDemandMinLength = 8
-	}
-	if len(c.Memory.OnDemandKeywords) == 0 {
-		c.Memory.OnDemandKeywords = []string{
-			"回忆", "记得", "还记得", "你记得", "过去", "以前", "曾经", "当年", "那天", "第一次",
-			"童年", "小时候", "身世", "秘密", "约定", "誓言", "任务", "线索", "剧情", "设定",
-			"桃花", "旧事", "熟悉", "我们以前", "我们曾",
-		}
-	}
 
 	// 性能配置默认值
 	if c.Performance.MaxConcurrentRequests == 0 {
@@ -325,6 +321,14 @@ func (c *Config) setDefaults() {
 	}
 	if c.Performance.CacheTTL == 0 {
 		c.Performance.CacheTTL = 3600
+	}
+
+	// 知识库配置默认值
+	if c.Knowledge.TopK == 0 {
+		c.Knowledge.TopK = 3
+	}
+	if c.Knowledge.ClassifierTimeout == 0 {
+		c.Knowledge.ClassifierTimeout = 100 // 100ms for fast classification
 	}
 }
 

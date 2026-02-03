@@ -4,8 +4,8 @@
 memory.db
 
 # 配置文件（包含敏感信息）
-config.yaml
-config.*.yaml
+# config.yaml
+# config.*.yaml
 !config.example.yaml
 
 # 依赖
