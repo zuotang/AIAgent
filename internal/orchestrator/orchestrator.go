@@ -147,15 +147,30 @@ func (o *orchestrator) ProcessMessage(
 
 	// 5. 增量压缩对话上下文（基于 token 占用率触发）
 	compressedContext := conversationHistory
-	stats := utils.CalculateContextStats(systemPrompt, combinedContext, conversationHistory, userText, o.chatModel)
+
+	// 获取上次的压缩上下文
+	lastCompressed, err := o.memStore.GetCompressedContext(ctx, userID, agentID)
+	var fullContext string
+	if err == nil && lastCompressed.CompressedText != "" {
+		// 有上次的压缩结果，计算总上下文长度（压缩结果 + 新消息）
+		fullContext = lastCompressed.CompressedText + "\n\n" + conversationHistory
+	} else {
+		// 没有上次的压缩结果，使用原始上下文
+		fullContext = conversationHistory
+	}
+
+	// 计算总上下文的 token 占用率
+	stats := utils.CalculateContextStats(systemPrompt, combinedContext, fullContext, userText, o.chatModel)
 	shouldCompress := ShouldCompressContextByTokens(stats, 60.0) // 保留约 40% 余量
 	if o.config.Base.Debug {
 		log.Printf("[DEBUG] 上下文占用率: %.1f%% (Total=%d, Limit=%d)", stats.UsagePercent, stats.TotalTokens, stats.ModelLimit)
+		log.Printf("[DEBUG] 上次压缩长度: %d, 新消息长度: %d, 总长度: %d",
+			len(lastCompressed.CompressedText), len(conversationHistory), len(fullContext))
 	}
 
 	if shouldCompress {
 		if o.config.Base.Debug {
-			log.Printf("[DEBUG] 触发增量压缩 - 当前上下文长度: %d", len(conversationHistory))
+			log.Printf("[DEBUG] 触发增量压缩 - 新消息长度: %d", len(conversationHistory))
 		}
 
 		// 使用 extractor 模型进行增量压缩
@@ -164,14 +179,14 @@ func (o *orchestrator) ProcessMessage(
 			compressorModel = o.chatModel
 		}
 
-		// 注意：这里传入0作为lastMessageID，因为压缩发生在保存新消息之前
-		// 实际的LastMessageID会在保存消息后更新
+		// 只压缩新消息，CompressContextIncremental 会自动合并上次的压缩结果
 		compressed, err := CompressContextIncremental(ctx, o.llmClient, o.memStore, userID, agentID, conversationHistory, 0, compressorModel, 200)
 		if err != nil {
 			if o.config.Base.Debug {
 				log.Printf("[DEBUG] 增量压缩失败: %v，使用原始上下文", err)
 			}
-			// 压缩失败，使用原始上下文
+			// 压缩失败，使用完整上下文
+			compressedContext = fullContext
 		} else {
 			compressedContext = compressed
 			if o.config.Base.Debug {
@@ -180,17 +195,12 @@ func (o *orchestrator) ProcessMessage(
 			}
 		}
 	} else {
-		// 未达到压缩阈值，使用上次压缩的上下文 + 加载的历史作为Agent输入
-		lastCompressed, err := o.memStore.GetCompressedContext(ctx, userID, agentID)
-		if err == nil && lastCompressed.CompressedText != "" {
-			// 有上次的压缩结果，追加加载的历史作为上下文
-			compressedContext = lastCompressed.CompressedText + "\n\n" + conversationHistory
-			if o.config.Base.Debug {
-				log.Printf("[DEBUG] 使用上次压缩 + 加载历史作为上下文 - 总长度: %d", len(compressedContext))
-			}
-		} else {
-			// 没有上次的压缩结果，直接使用原始上下文
-			if o.config.Base.Debug {
+		// 未达到压缩阈值，使用完整上下文（上次压缩 + 新消息）
+		compressedContext = fullContext
+		if o.config.Base.Debug {
+			if lastCompressed.CompressedText != "" {
+				log.Printf("[DEBUG] 使用上次压缩 + 新消息作为上下文 - 总长度: %d", len(compressedContext))
+			} else {
 				log.Printf("[DEBUG] 首次对话或无压缩历史 - 使用原始上下文，长度: %d", len(conversationHistory))
 			}
 		}
@@ -330,15 +340,30 @@ func (o *orchestrator) ProcessMessageStream(
 
 	// 5. 增量压缩对话上下文（基于 token 占用率触发）
 	compressedContext := conversationHistory
-	stats := utils.CalculateContextStats(systemPrompt, combinedContext, conversationHistory, userText, o.chatModel)
+
+	// 获取上次的压缩上下文
+	lastCompressedStream, err := o.memStore.GetCompressedContext(ctx, userID, agentID)
+	var fullContextStream string
+	if err == nil && lastCompressedStream.CompressedText != "" {
+		// 有上次的压缩结果，计算总上下文长度（压缩结果 + 新消息）
+		fullContextStream = lastCompressedStream.CompressedText + "\n\n" + conversationHistory
+	} else {
+		// 没有上次的压缩结果，使用原始上下文
+		fullContextStream = conversationHistory
+	}
+
+	// 计算总上下文的 token 占用率
+	stats := utils.CalculateContextStats(systemPrompt, combinedContext, fullContextStream, userText, o.chatModel)
 	shouldCompressStream := ShouldCompressContextByTokens(stats, 60.0) // 保留约 40% 余量
 	if o.config.Base.Debug {
 		log.Printf("[DEBUG] 流式处理 - 上下文占用率: %.1f%% (Total=%d, Limit=%d)", stats.UsagePercent, stats.TotalTokens, stats.ModelLimit)
+		log.Printf("[DEBUG] 流式处理 - 上次压缩长度: %d, 新消息长度: %d, 总长度: %d",
+			len(lastCompressedStream.CompressedText), len(conversationHistory), len(fullContextStream))
 	}
 
 	if shouldCompressStream {
 		if o.config.Base.Debug {
-			log.Printf("[DEBUG] 流式处理 - 触发增量压缩 - 当前上下文长度: %d", len(conversationHistory))
+			log.Printf("[DEBUG] 流式处理 - 触发增量压缩 - 新消息长度: %d", len(conversationHistory))
 		}
 
 		compressorModel := o.config.Extractor.Model
@@ -346,13 +371,14 @@ func (o *orchestrator) ProcessMessageStream(
 			compressorModel = o.chatModel
 		}
 
-		// 注意：这里传入0作为lastMessageID，因为压缩发生在保存新消息之前
-		// 实际的LastMessageID会在保存消息后更新
+		// 只压缩新消息，CompressContextIncremental 会自动合并上次的压缩结果
 		compressed, err := CompressContextIncremental(ctx, o.llmClient, o.memStore, userID, agentID, conversationHistory, 0, compressorModel, 200)
 		if err != nil {
 			if o.config.Base.Debug {
 				log.Printf("[DEBUG] 增量压缩失败: %v，使用原始上下文", err)
 			}
+			// 压缩失败，使用完整上下文
+			compressedContext = fullContextStream
 		} else {
 			compressedContext = compressed
 			if o.config.Base.Debug {
@@ -360,17 +386,12 @@ func (o *orchestrator) ProcessMessageStream(
 			}
 		}
 	} else {
-		// 未达到压缩阈值，使用上次压缩的上下文 + 加载的历史作为Agent输入
-		lastCompressed, err := o.memStore.GetCompressedContext(ctx, userID, agentID)
-		if err == nil && lastCompressed.CompressedText != "" {
-			// 有上次的压缩结果，追加加载的历史作为上下文
-			compressedContext = lastCompressed.CompressedText + "\n\n" + conversationHistory
-			if o.config.Base.Debug {
-				log.Printf("[DEBUG] 流式处理 - 使用上次压缩 + 加载历史作为上下文 - 总长度: %d", len(compressedContext))
-			}
-		} else {
-			// 没有上次的压缩结果，直接使用原始上下文
-			if o.config.Base.Debug {
+		// 未达到压缩阈值，使用完整上下文（上次压缩 + 新消息）
+		compressedContext = fullContextStream
+		if o.config.Base.Debug {
+			if lastCompressedStream.CompressedText != "" {
+				log.Printf("[DEBUG] 流式处理 - 使用上次压缩 + 新消息作为上下文 - 总长度: %d", len(compressedContext))
+			} else {
 				log.Printf("[DEBUG] 流式处理 - 首次对话或无压缩历史 - 使用原始上下文，长度: %d", len(conversationHistory))
 			}
 		}
