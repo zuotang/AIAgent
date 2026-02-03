@@ -115,6 +115,7 @@ func CompressContextIncremental(
 	// 保存压缩结果和最后处理的消息ID
 	compressedCtx := &memory.CompressedContext{
 		UserID:          userID,
+		AgentID:         agentID, // 必须设置 AgentID，否则查询时找不到
 		CompressedText:  compressed,
 		LastMessageID:   lastMessageID,
 		UncompressedLen: 0, // 重置未压缩长度
