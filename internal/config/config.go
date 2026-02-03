@@ -122,10 +122,11 @@ type AnthropicConfig struct {
 
 // QdrantConfig Qdrant 配置
 type QdrantConfig struct {
-	BaseURL    string `yaml:"base_url"`
-	APIKey     string `yaml:"api_key"`     // Qdrant API Key（可选）
-	Collection string `yaml:"collection"`
-	TopK       int    `yaml:"top_k"`
+	BaseURL    string  `yaml:"base_url"`
+	APIKey     string  `yaml:"api_key"`     // Qdrant API Key（可选）
+	Collection string  `yaml:"collection"`
+	TopK       int     `yaml:"top_k"`
+	MinScore   float64 `yaml:"min_score"`   // 最小相似度分数（0-1），低于此分数的结果将被过滤
 }
 
 // DatabaseConfig 数据库配置
@@ -147,8 +148,9 @@ type MemoryConfig struct {
 
 // KnowledgeConfig 知识库配置
 type KnowledgeConfig struct {
-	EnableRouting bool `yaml:"enable_routing"` // 启用智能路由
-	TopK          int  `yaml:"top_k"`          // 检索数量
+	EnableRouting bool    `yaml:"enable_routing"` // 启用智能路由
+	TopK          int     `yaml:"top_k"`          // 检索数量
+	MinScore      float64 `yaml:"min_score"`      // 最小相似度分数（0-1），低于此分数的结果将被过滤
 }
 
 // Load 从文件加载配置
@@ -270,6 +272,9 @@ func (c *Config) setDefaults() {
 	if c.Storage.Qdrant.TopK == 0 {
 		c.Storage.Qdrant.TopK = 6
 	}
+	if c.Storage.Qdrant.MinScore == 0 {
+		c.Storage.Qdrant.MinScore = 0.3 // 默认最小相似度 0.3
+	}
 
 	// 服务配置默认值
 	if c.Services.API.Port == 0 {
@@ -325,6 +330,9 @@ func (c *Config) setDefaults() {
 	// 知识库配置默认值
 	if c.Knowledge.TopK == 0 {
 		c.Knowledge.TopK = 3
+	}
+	if c.Knowledge.MinScore == 0 {
+		c.Knowledge.MinScore = 0.5 // 默认最小相似度 0.5（知识库要求更高的相关性）
 	}
 }
 

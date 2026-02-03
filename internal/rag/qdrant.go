@@ -49,29 +49,45 @@ type Doc struct {
 }
 
 type QdrantStore struct {
-	BaseURL            string
-	APIKey             string // Qdrant API Key（可选）
-	Collection         string // 默认为 memories，用于存储所有数据
-	Embedder           func(context.Context, string) ([]float32, error)
-	HTTP               *http.Client
+	BaseURL             string
+	APIKey              string // Qdrant API Key（可选）
+	Collection          string // 已废弃：向后兼容，指向 MemoryCollection
+	MemoryCollection    string // 记忆集合，默认为 memories
+	KnowledgeCollection string // 知识库集合，默认为 knowledge
+	Embedder            func(context.Context, string) ([]float32, error)
+	HTTP                *http.Client
 }
 
 func NewQdrantStore(qdrantURL, apiKey, collection string, embedder func(context.Context, string) ([]float32, error)) *QdrantStore {
+	// 如果没有指定 collection，使用默认值
+	if collection == "" {
+		collection = "memories"
+	}
+
 	return &QdrantStore{
-		BaseURL:            qdrantURL,
-		APIKey:             apiKey,
-		Collection:         collection,
-		Embedder:           embedder,
+		BaseURL:             qdrantURL,
+		APIKey:              apiKey,
+		Collection:          collection,          // 向后兼容
+		MemoryCollection:    collection,          // 记忆集合
+		KnowledgeCollection: "knowledge",         // 知识库集合
+		Embedder:            embedder,
 		HTTP: &http.Client{
 			Timeout: 60 * time.Second,
 		},
 	}
 }
 
-// EnsureCollection：你第一次启动时会自动创建 collection（向量维度由第一次 embedding 决定）
+// EnsureCollection：确保记忆和知识库集合都存在
 func (s *QdrantStore) EnsureCollection(ctx context.Context, dim int) error {
-	// 确保集合存在
-	return s.ensureCollection(ctx, s.Collection, dim)
+	// 确保记忆集合存在
+	if err := s.ensureCollection(ctx, s.MemoryCollection, dim); err != nil {
+		return fmt.Errorf("failed to ensure memory collection: %w", err)
+	}
+	// 确保知识库集合存在
+	if err := s.ensureCollection(ctx, s.KnowledgeCollection, dim); err != nil {
+		return fmt.Errorf("failed to ensure knowledge collection: %w", err)
+	}
+	return nil
 }
 
 func (s *QdrantStore) ensureCollection(ctx context.Context, collection string, dim int) error {
@@ -113,11 +129,6 @@ func (s *QdrantStore) ensureCollection(ctx context.Context, collection string, d
 	return nil
 }
 
-// SimilaritySearch 搜索记忆（需要 user_id 和 agent_id 过滤）
-func (s *QdrantStore) SimilaritySearch(ctx context.Context, userID string, agentID uint, query string, topK int) ([]Doc, error) {
-	return s.SimilaritySearchMemory(ctx, userID, agentID, query, topK)
-}
-
 // SimilaritySearchMemory 搜索记忆（需要 user_id 和 agent_id 过滤）
 func (s *QdrantStore) SimilaritySearchMemory(ctx context.Context, userID string, agentID uint, query string, topK int) ([]Doc, error) {
 	vec, err := s.Embedder(ctx, query)
@@ -140,15 +151,11 @@ func (s *QdrantStore) SimilaritySearchMemory(ctx context.Context, userID string,
 					"key":   "agent_id",
 					"match": map[string]any{"value": agentID},
 				},
-				map[string]any{
-					"key":   "type",
-					"match": map[string]any{"value": "memory"},
-				},
 			},
 		},
 	}
 	b, _ := json.Marshal(body)
-	url := s.BaseURL + "/collections/" + s.Collection + "/points/search"
+	url := s.BaseURL + "/collections/" + s.MemoryCollection + "/points/search"
 	resp, err := s.doWithRetry(ctx, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(b))
 		if err != nil {
@@ -204,15 +211,11 @@ func (s *QdrantStore) SimilaritySearchKnowledge(ctx context.Context, agentID uin
 					"key":   "agent_id",
 					"match": map[string]any{"value": agentID},
 				},
-				map[string]any{
-					"key":   "type",
-					"match": map[string]any{"value": "knowledge"},
-				},
 			},
 		},
 	}
 	b, _ := json.Marshal(body)
-	url := s.BaseURL + "/collections/" + s.Collection + "/points/search"
+	url := s.BaseURL + "/collections/" + s.KnowledgeCollection + "/points/search"
 	resp, err := s.doWithRetry(ctx, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(b))
 		if err != nil {
@@ -243,10 +246,6 @@ func (s *QdrantStore) SimilaritySearchKnowledge(ctx context.Context, agentID uin
 	for _, r := range out.Result {
 		text, _ := r.Payload["text"].(string)
 		if text == "" {
-			// 尝试使用 content 字段
-			text, _ = r.Payload["content"].(string)
-		}
-		if text == "" {
 			continue
 		}
 		docs = append(docs, Doc{PageContent: text, Score: r.Score})
@@ -272,7 +271,6 @@ func (s *QdrantStore) UpsertMemoryTexts(ctx context.Context, userID string, agen
 			"agent_id":  agentID,
 			"text":      t,
 			"timestamp": time.Now().Unix(),
-			"type":      "memory",
 		}
 
 		body := map[string]any{
@@ -285,7 +283,7 @@ func (s *QdrantStore) UpsertMemoryTexts(ctx context.Context, userID string, agen
 			},
 		}
 
-		if err := s.UpsertPointToCollection(ctx, body, s.Collection); err != nil {
+		if err := s.UpsertPointToCollection(ctx, body, s.MemoryCollection); err != nil {
 			return err
 		}
 	}
@@ -307,10 +305,9 @@ func (s *QdrantStore) UpsertKnowledgeTexts(ctx context.Context, agentID uint, te
 
 		payload := map[string]any{
 			"agent_id":  agentID,
-			"content":   t,
+			"text":      t,
 			"file_name": fileName,
 			"timestamp": time.Now().Unix(),
-			"type":      "knowledge",
 		}
 
 		body := map[string]any{
@@ -323,23 +320,16 @@ func (s *QdrantStore) UpsertKnowledgeTexts(ctx context.Context, agentID uint, te
 			},
 		}
 
-		if err := s.UpsertPointToCollection(ctx, body, s.Collection); err != nil {
+		if err := s.UpsertPointToCollection(ctx, body, s.KnowledgeCollection); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// UpsertTexts 存储知识库文本（兼容旧接口，但不再使用 user_id）
-// 已废弃：请使用 UpsertKnowledgeTexts 或 UpsertMemoryTexts
-func (s *QdrantStore) UpsertTexts(ctx context.Context, userID string, agentID uint, texts []string, fileName string) error {
-	// 为了向后兼容，默认作为知识库处理（不使用 user_id）
-	return s.UpsertKnowledgeTexts(ctx, agentID, texts, fileName)
-}
-
 // UpsertPoint 向 Qdrant 存储单个点，支持自定义元数据
 func (s *QdrantStore) UpsertPoint(ctx context.Context, body map[string]any) error {
-	return s.UpsertPointToCollection(ctx, body, s.Collection)
+	return s.UpsertPointToCollection(ctx, body, s.MemoryCollection)
 }
 
 func (s *QdrantStore) UpsertPointToCollection(ctx context.Context, body map[string]any, collection string) error {
@@ -391,17 +381,13 @@ func (s *QdrantStore) ListFiles(ctx context.Context, agentID uint) ([]string, er
 					"key":   "agent_id",
 					"match": map[string]any{"value": agentID},
 				},
-				map[string]any{
-					"key":   "type",
-					"match": map[string]any{"value": "knowledge"},
-				},
 			},
 		},
 		"limit":        100,
 		"with_payload": true,
 	}
 	b, _ := json.Marshal(body)
-	url := s.BaseURL + "/collections/" + s.Collection + "/points/scroll"
+	url := s.BaseURL + "/collections/" + s.KnowledgeCollection + "/points/scroll"
 	resp, err := s.doWithRetry(ctx, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(b))
 		if err != nil {
@@ -460,16 +446,12 @@ func (s *QdrantStore) DeleteKnowledgeByFilter(ctx context.Context, agentID uint)
 					"key":   "agent_id",
 					"match": map[string]any{"value": agentID},
 				},
-				map[string]any{
-					"key":   "type",
-					"match": map[string]any{"value": "knowledge"},
-				},
 			},
 		},
 	}
 
 	b, _ := json.Marshal(body)
-	url := s.BaseURL + "/collections/" + s.Collection + "/points/delete"
+	url := s.BaseURL + "/collections/" + s.KnowledgeCollection + "/points/delete"
 	resp, err := s.doWithRetry(ctx, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(b))
 		if err != nil {
@@ -501,16 +483,12 @@ func (s *QdrantStore) DeleteMemoryByFilter(ctx context.Context, userID string, a
 					"key":   "agent_id",
 					"match": map[string]any{"value": agentID},
 				},
-				map[string]any{
-					"key":   "type",
-					"match": map[string]any{"value": "memory"},
-				},
 			},
 		},
 	}
 
 	b, _ := json.Marshal(body)
-	url := s.BaseURL + "/collections/" + s.Collection + "/points/delete"
+	url := s.BaseURL + "/collections/" + s.MemoryCollection + "/points/delete"
 	resp, err := s.doWithRetry(ctx, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(b))
 		if err != nil {
@@ -527,12 +505,4 @@ func (s *QdrantStore) DeleteMemoryByFilter(ctx context.Context, userID string, a
 		return fmt.Errorf("delete points http %d", resp.StatusCode)
 	}
 	return nil
-}
-
-// DeletePointsByFilter 根据过滤条件删除向量点（兼容旧接口）
-// 已废弃：请使用 DeleteKnowledgeByFilter 或 DeleteMemoryByFilter
-func (s *QdrantStore) DeletePointsByFilter(ctx context.Context, userID string, agentID uint) error {
-	// 为了向后兼容，删除该用户的所有数据（包括记忆和知识）
-	// 但实际上知识库不应该按用户删除
-	return s.DeleteMemoryByFilter(ctx, userID, agentID)
 }

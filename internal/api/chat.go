@@ -502,10 +502,10 @@ func (s *ChatService) HandleClearData(c echo.Context) error {
 		})
 	}
 
-	// 清空 Qdrant 中的向量数据
-	if err := s.orch.GetVectorStore().DeletePointsByFilter(ctx, req.UserID, req.AgentID); err != nil {
+	// 清空 Qdrant 中的记忆向量数据
+	if err := s.orch.GetVectorStore().DeleteMemoryByFilter(ctx, req.UserID, req.AgentID); err != nil {
 		// 向量删除失败不应该阻止整个操作，记录错误但继续
-		println("Warning: Failed to delete vectors from Qdrant:", err.Error())
+		println("Warning: Failed to delete memory vectors from Qdrant:", err.Error())
 	}
 
 	return c.JSON(http.StatusOK, ClearDataResponse{

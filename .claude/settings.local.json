@@ -19,7 +19,8 @@
       "Bash(taskkill:*)",
       "Bash(bash:*)",
       "Bash(tasklist:*)",
-      "Bash(sqlite3:*)"
+      "Bash(sqlite3:*)",
+      "Bash(wc:*)"
     ]
   }
 }

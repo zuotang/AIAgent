@@ -122,95 +122,21 @@ func (o *orchestrator) ProcessMessage(
 		}
 	}
 
-	// 2. 根据分类结果，条件性地检索上下文
-	structuredText := ""
-	var semanticDocs []rag.Doc
-	var knowledgeDocs []rag.Doc
-	memoryText := ""
-	knowledgeText := ""
-
-	// 并行检索记忆和知识库（如果都需要）
-	if queryType == "BOTH" {
-		type result struct {
-			structured string
-			semantic   []rag.Doc
-			knowledge  []rag.Doc
-			err        error
-		}
-
-		memoryCh := make(chan result, 1)
-		knowledgeCh := make(chan result, 1)
-
-		// 并行检索记忆
-		go func() {
-			structured, semantic, err := o.retrieveMemories(ctx, userID, agentID, userText)
-			memoryCh <- result{structured: structured, semantic: semantic, err: err}
-		}()
-
-		// 并行检索知识库
-		go func() {
-			knowledge, err := o.retrieveKnowledge(ctx, userID, agentID, userText)
-			knowledgeCh <- result{knowledge: knowledge, err: err}
-		}()
-
-		// 收集结果
-		memoryResult := <-memoryCh
-		knowledgeResult := <-knowledgeCh
-
-		if memoryResult.err == nil {
-			structuredText = memoryResult.structured
-			semanticDocs = memoryResult.semantic
-			memoryText = o.formatMemories(structuredText, semanticDocs)
-		} else if o.config.Base.Debug {
-			log.Printf("[DEBUG] 记忆检索失败: %v", memoryResult.err)
-		}
-
-		if knowledgeResult.err == nil {
-			knowledgeDocs = knowledgeResult.knowledge
-			knowledgeText = o.formatKnowledge(knowledgeDocs)
-		} else if o.config.Base.Debug {
-			log.Printf("[DEBUG] 知识库检索失败: %v", knowledgeResult.err)
-		}
-
-	} else if queryType == "MEMORY" {
-		// 只检索记忆
-		var err error
-		structuredText, semanticDocs, err = o.retrieveMemories(ctx, userID, agentID, userText)
-		if err != nil {
-			if o.config.Base.Debug {
-				log.Printf("[DEBUG] 记忆检索失败: %v", err)
-			}
-		} else {
-			memoryText = o.formatMemories(structuredText, semanticDocs)
-			if o.config.Base.Debug {
-				log.Printf("[DEBUG] 记忆已加载")
-			}
-		}
-
-	} else if queryType == "KNOWLEDGE" {
-		// 只检索知识库
-		var err error
-		knowledgeDocs, err = o.retrieveKnowledge(ctx, userID, agentID, userText)
-		if err != nil {
-			if o.config.Base.Debug {
-				log.Printf("[DEBUG] 知识库检索失败: %v", err)
-			}
-		} else {
-			knowledgeText = o.formatKnowledge(knowledgeDocs)
-			if o.config.Base.Debug {
-				log.Printf("[DEBUG] 知识库已加载")
-			}
+	// 2. 检索并合并上下文（使用提取的公共函数）
+	contextResult, err := o.retrieveAndMergeContext(ctx, userID, agentID, userText, queryType)
+	if err != nil {
+		if o.config.Base.Debug {
+			log.Printf("[DEBUG] 上下文检索失败: %v", err)
 		}
 	}
-	// queryType == "NONE" 时不检索任何内容
 
 	// 3. 合并上下文
 	var contextParts []string
-	if memoryText != "" {
-		contextParts = append(contextParts, memoryText)
+	if contextResult.MemoryText != "" {
+		contextParts = append(contextParts, contextResult.MemoryText)
 	}
-	if knowledgeText != "" {
-		contextParts = append(contextParts, knowledgeText)
+	if contextResult.KnowledgeText != "" {
+		contextParts = append(contextParts, contextResult.KnowledgeText)
 	}
 	combinedContext := strings.Join(contextParts, "\n\n")
 
@@ -335,22 +261,24 @@ func (o *orchestrator) ProcessMessage(
 
 	// 5. 异步提取并存储记忆（智能触发）
 	if o.config.Memory.EnableExtractor {
-		if o.shouldExtractMemory(userText, output.Response) {
-			go func() {
-				// 使用 background context 避免父 context 取消影响异步任务
-				// 设置超时防止 goroutine 泄漏
-				bgCtx, cancel := context.WithTimeout(context.Background(), time.Duration(o.config.Base.Timeout)*time.Second)
-				defer cancel()
+		// 将判断和提取都放到异步执行，避免 LLM 分类器阻塞主流程
+		go func() {
+			// 使用 background context 避免父 context 取消影响异步任务
+			// 设置超时防止 goroutine 泄漏
+			bgCtx, cancel := context.WithTimeout(context.Background(), time.Duration(o.config.Base.Timeout)*time.Second)
+			defer cancel()
 
+			// 异步判断是否需要提取记忆
+			if o.shouldExtractMemory(userText, output.Response) {
 				if err := o.extractAndStoreMemories(bgCtx, userID, agentID, conversationHistory, userText, output.Response); err != nil {
 					if o.config.Base.Debug {
 						log.Printf("[DEBUG] 异步提取记忆失败: %v", err)
 					}
 				}
-			}()
-		} else if o.config.Base.Debug {
-			log.Printf("[DEBUG] 跳过记忆提取：未触发条件")
-		}
+			} else if o.config.Base.Debug {
+				log.Printf("[DEBUG] 跳过记忆提取：未触发条件")
+			}
+		}()
 	} else if o.config.Base.Debug {
 		log.Printf("[DEBUG] 记忆提取功能已禁用 (memory.enable_extractor=false)")
 	}
@@ -377,95 +305,21 @@ func (o *orchestrator) ProcessMessageStream(
 		}
 	}
 
-	// 2. 根据分类结果，条件性地检索上下文
-	structuredText := ""
-	var semanticDocs []rag.Doc
-	var knowledgeDocs []rag.Doc
-	memoryText := ""
-	knowledgeText := ""
-
-	// 并行检索记忆和知识库（如果都需要）
-	if queryType == "BOTH" {
-		type result struct {
-			structured string
-			semantic   []rag.Doc
-			knowledge  []rag.Doc
-			err        error
-		}
-
-		memoryCh := make(chan result, 1)
-		knowledgeCh := make(chan result, 1)
-
-		// 并行检索记忆
-		go func() {
-			structured, semantic, err := o.retrieveMemories(ctx, userID, agentID, userText)
-			memoryCh <- result{structured: structured, semantic: semantic, err: err}
-		}()
-
-		// 并行检索知识库
-		go func() {
-			knowledge, err := o.retrieveKnowledge(ctx, userID, agentID, userText)
-			knowledgeCh <- result{knowledge: knowledge, err: err}
-		}()
-
-		// 收集结果
-		memoryResult := <-memoryCh
-		knowledgeResult := <-knowledgeCh
-
-		if memoryResult.err == nil {
-			structuredText = memoryResult.structured
-			semanticDocs = memoryResult.semantic
-			memoryText = o.formatMemories(structuredText, semanticDocs)
-		} else if o.config.Base.Debug {
-			log.Printf("[DEBUG] 流式处理 - 记忆检索失败: %v", memoryResult.err)
-		}
-
-		if knowledgeResult.err == nil {
-			knowledgeDocs = knowledgeResult.knowledge
-			knowledgeText = o.formatKnowledge(knowledgeDocs)
-		} else if o.config.Base.Debug {
-			log.Printf("[DEBUG] 流式处理 - 知识库检索失败: %v", knowledgeResult.err)
-		}
-
-	} else if queryType == "MEMORY" {
-		// 只检索记忆
-		var err error
-		structuredText, semanticDocs, err = o.retrieveMemories(ctx, userID, agentID, userText)
-		if err != nil {
-			if o.config.Base.Debug {
-				log.Printf("[DEBUG] 流式处理 - 记忆检索失败: %v", err)
-			}
-		} else {
-			memoryText = o.formatMemories(structuredText, semanticDocs)
-			if o.config.Base.Debug {
-				log.Printf("[DEBUG] 流式处理 - 记忆已加载")
-			}
-		}
-
-	} else if queryType == "KNOWLEDGE" {
-		// 只检索知识库
-		var err error
-		knowledgeDocs, err = o.retrieveKnowledge(ctx, userID, agentID, userText)
-		if err != nil {
-			if o.config.Base.Debug {
-				log.Printf("[DEBUG] 流式处理 - 知识库检索失败: %v", err)
-			}
-		} else {
-			knowledgeText = o.formatKnowledge(knowledgeDocs)
-			if o.config.Base.Debug {
-				log.Printf("[DEBUG] 流式处理 - 知识库已加载")
-			}
+	// 2. 检索并合并上下文（使用提取的公共函数）
+	contextResult, err := o.retrieveAndMergeContext(ctx, userID, agentID, userText, queryType)
+	if err != nil {
+		if o.config.Base.Debug {
+			log.Printf("[DEBUG] 流式处理 - 上下文检索失败: %v", err)
 		}
 	}
-	// queryType == "NONE" 时不检索任何内容
 
 	// 3. 合并上下文
 	var contextParts []string
-	if memoryText != "" {
-		contextParts = append(contextParts, memoryText)
+	if contextResult.MemoryText != "" {
+		contextParts = append(contextParts, contextResult.MemoryText)
 	}
-	if knowledgeText != "" {
-		contextParts = append(contextParts, knowledgeText)
+	if contextResult.KnowledgeText != "" {
+		contextParts = append(contextParts, contextResult.KnowledgeText)
 	}
 	combinedContext := strings.Join(contextParts, "\n\n")
 
@@ -574,22 +428,24 @@ func (o *orchestrator) ProcessMessageStream(
 
 	// 6. 异步提取并存储记忆（智能触发）
 	if o.config.Memory.EnableExtractor {
-		if o.shouldExtractMemory(userText, output.Response) {
-			go func() {
-				// 使用 background context 避免父 context 取消影响异步任务
-				// 设置超时防止 goroutine 泄漏
-				bgCtx, cancel := context.WithTimeout(context.Background(), time.Duration(o.config.Base.Timeout)*time.Second)
-				defer cancel()
+		// 将判断和提取都放到异步执行，避免 LLM 分类器阻塞主流程
+		go func() {
+			// 使用 background context 避免父 context 取消影响异步任务
+			// 设置超时防止 goroutine 泄漏
+			bgCtx, cancel := context.WithTimeout(context.Background(), time.Duration(o.config.Base.Timeout)*time.Second)
+			defer cancel()
 
+			// 异步判断是否需要提取记忆
+			if o.shouldExtractMemory(userText, output.Response) {
 				if err := o.extractAndStoreMemories(bgCtx, userID, agentID, conversationHistory, userText, output.Response); err != nil {
 					if o.config.Base.Debug {
 						log.Printf("[DEBUG] 异步提取记忆失败: %v", err)
 					}
 				}
-			}()
-		} else if o.config.Base.Debug {
-			log.Printf("[DEBUG] 跳过记忆提取：未触发条件")
-		}
+			} else if o.config.Base.Debug {
+				log.Printf("[DEBUG] 跳过记忆提取：未触发条件")
+			}
+		}()
 	} else if o.config.Base.Debug {
 		log.Printf("[DEBUG] 记忆提取功能已禁用 (memory.enable_extractor=false)")
 	}
@@ -597,102 +453,8 @@ func (o *orchestrator) ProcessMessageStream(
 	return output, nil
 }
 
-// retrieveMemories 并行查询结构化记忆和语义记忆
-func (o *orchestrator) retrieveMemories(
-	ctx context.Context,
-	userID string,
-	agentID uint,
-	query string,
-) (string, []rag.Doc, error) {
-	type result struct {
-		structured string
-		semantic   []rag.Doc
-		err        error
-	}
 
-	structuredCh := make(chan result, 1)
-	semanticCh := make(chan result, 1)
 
-	// 并行查询 SQLite（结构化记忆）
-	go func() {
-		callCtx, cancel := context.WithTimeout(ctx, time.Duration(o.config.Base.Timeout)*time.Second)
-		defer cancel()
-		text, err := o.memStore.RenderStructuredMemory(callCtx, userID, agentID, 20)
-		structuredCh <- result{structured: text, err: err}
-	}()
-
-	// 并行查询 Qdrant
-	go func() {
-		callCtx, cancel := context.WithTimeout(ctx, time.Duration(o.config.Base.Timeout)*time.Second)
-		defer cancel()
-		docs, err := o.vectorStore.SimilaritySearch(callCtx, userID, agentID, query, o.config.Storage.Qdrant.TopK)
-		semanticCh <- result{semantic: docs, err: err}
-	}()
-
-	// 收集结果
-	structuredResult := <-structuredCh
-	semanticResult := <-semanticCh
-
-	structuredText := structuredResult.structured
-	if structuredResult.err != nil && o.config.Base.Debug {
-		log.Printf("[DEBUG] 结构化记忆查询失败: %v", structuredResult.err)
-	}
-
-	if semanticResult.err != nil {
-		return "", nil, semanticResult.err
-	}
-
-	return structuredText, semanticResult.semantic, nil
-}
-
-// formatMemories 格式化记忆为文本
-func (o *orchestrator) formatMemories(structured string, semantic []rag.Doc) string {
-	var sb strings.Builder
-
-	sb.WriteString("【角色记忆库（按需加载）】\n")
-	if structured != "" && structured != "(暂无长期记忆)" {
-		sb.WriteString("【结构化记忆】\n")
-		sb.WriteString(structured)
-		sb.WriteString("\n")
-	}
-	if len(semantic) > 0 {
-		sb.WriteString("【剧情/互动线索】\n")
-	}
-	for i, doc := range semantic {
-		if i >= o.config.Storage.Qdrant.TopK {
-			break
-		}
-		sb.WriteString("- " + truncate(doc.PageContent, 220) + "\n")
-	}
-
-	return sb.String()
-}
-
-// showContextStats 显示上下文统计
-func (o *orchestrator) showContextStats(
-	systemPrompt string,
-	structuredText string,
-	semanticDocs []rag.Doc,
-	conversation string,
-	userInput string,
-) {
-	memory := structuredText + "\n"
-	for i, doc := range semanticDocs {
-		if i >= o.config.Storage.Qdrant.TopK {
-			break
-		}
-		memory += doc.PageContent + "\n"
-	}
-
-	stats := utils.CalculateContextStats(
-		systemPrompt,
-		memory,
-		conversation,
-		userInput,
-		o.chatModel,
-	)
-	log.Print(utils.FormatContextStats(stats))
-}
 
 // extractAndStoreMemories 提取并存储记忆
 func (o *orchestrator) extractAndStoreMemories(
@@ -726,7 +488,32 @@ func (o *orchestrator) extractAndStoreMemories(
 	}
 
 	if len(memories) == 0 {
+		if o.config.Base.Debug {
+			log.Printf("[DEBUG] ========== 记忆提取结果 ==========")
+			log.Printf("[DEBUG] 未提取到任何记忆")
+			log.Printf("[DEBUG] ===================================")
+		}
 		return nil
+	}
+
+	// 打印提取的记忆详细内容
+	if o.config.Base.Debug {
+		log.Printf("[DEBUG] ========== 记忆提取结果 ==========")
+		log.Printf("[DEBUG] 提取到 %d 条记忆:", len(memories))
+		for i, m := range memories {
+			log.Printf("[DEBUG] 记忆 %d:", i+1)
+			log.Printf("[DEBUG]   类型(type): %s", m.Type)
+			log.Printf("[DEBUG]   归属(owner): %s", m.Owner)
+			log.Printf("[DEBUG]   键(key): %s", m.Key)
+			log.Printf("[DEBUG]   值(value): %s", m.Value)
+			log.Printf("[DEBUG]   置信度(confidence): %.2f", m.Confidence)
+			log.Printf("[DEBUG]   重要性(importance): %.2f", m.Importance)
+			log.Printf("[DEBUG]   层级(layer): %d", m.Layer)
+			log.Printf("[DEBUG]   写入向量库(also_vector): %t", m.AlsoVector)
+			log.Printf("[DEBUG]   描述(text): %s", m.Text)
+			log.Printf("[DEBUG]   ---")
+		}
+		log.Printf("[DEBUG] ===================================")
 	}
 
 	// 存储到 SQLite
@@ -968,124 +755,7 @@ func (o *orchestrator) shouldExtractConservative(userText, assistantText string)
 	return false
 }
 
-func truncate(s string, max int) string {
-	s = strings.TrimSpace(s)
-	if max <= 0 || len(s) <= max {
-		return s
-	}
-	return s[:max] + "…"
-}
 
-func fingerprint(owner, typ, key, val string) string {
-	// Simple fingerprint using concatenation
-	return fmt.Sprintf("%s|%s|%s|%s", owner, typ, key, val)
-}
 
-// classifyQueryType 使用小模型快速分类查询类型
-// 返回: MEMORY, KNOWLEDGE, BOTH, NONE
-func (o *orchestrator) classifyQueryType(ctx context.Context, userText string) string {
-	// 过滤极短消息
-	if len(strings.TrimSpace(userText)) < 2 {
-		return "NONE"
-	}
 
-	// 创建超时上下文（使用分类器配置的超时时间）
-	timeout := time.Duration(o.config.Classifier.Timeout) * time.Second
-	classifyCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 
-	// 构建分类提示词
-	prompt := fmt.Sprintf(`分析用户的查询，判断需要什么类型的上下文来回答。如果是一个听不懂的名词就需要调用知识库来回答。
-
-上下文类型：
-1. MEMORY（记忆）：用户的个人信息、偏好、历史对话、过往互动
-   - 例如："我之前说过什么"、"你还记得我的名字吗"、"我喜欢什么"
-2. KNOWLEDGE（知识库）：事实性信息、文档内容、技术知识、通用知识
-   - 例如："什么是机器学习"、"如何使用这个API"、"解释一下原理"
-3. BOTH（两者都需要）：既需要个人记忆又需要知识库
-   - 例如："根据我的技能水平，推荐学习资料"
-4. NONE（都不需要）：简单闲聊、问候、确认等
-   - 例如："你好"、"谢谢"、"好的"
-
-用户查询：%s
-
-只回答以下之一：MEMORY、KNOWLEDGE、BOTH、NONE
-回答：`, userText)
-
-	msgs := []models.ChatMessage{
-		{Role: "user", Content: prompt},
-	}
-
-	// 使用独立的分类器客户端
-	classifierModel := o.config.Classifier.Model
-	response, err := o.classifierClient.Chat(classifyCtx, msgs, classifierModel)
-	if err != nil {
-		if o.config.Base.Debug {
-			log.Printf("[DEBUG] 查询分类失败: %v，默认使用 NONE\n", err)
-		}
-		return "NONE"
-	}
-
-	// 解析响应
-	response = strings.TrimSpace(strings.ToUpper(response))
-
-	// 提取分类结果
-	if strings.Contains(response, "BOTH") {
-		return "BOTH"
-	} else if strings.Contains(response, "MEMORY") {
-		return "MEMORY"
-	} else if strings.Contains(response, "KNOWLEDGE") {
-		return "KNOWLEDGE"
-	} else if strings.Contains(response, "NONE") {
-		return "NONE"
-	}
-
-	// 默认返回 NONE（保守策略）
-	if o.config.Base.Debug {
-		log.Printf("[DEBUG] 无法解析分类结果: %s，默认使用 NONE\n", response)
-	}
-	return "NONE"
-}
-
-// retrieveKnowledge 检索知识库
-func (o *orchestrator) retrieveKnowledge(
-	ctx context.Context,
-	userID string,
-	agentID uint,
-	query string,
-) ([]rag.Doc, error) {
-	callCtx, cancel := context.WithTimeout(ctx, time.Duration(o.config.Base.Timeout)*time.Second)
-	defer cancel()
-
-	// 从 Qdrant 检索知识库内容
-	// 注意：当前实现会返回所有匹配的文档（包括记忆和知识库）
-	// 未来可以通过修改 SimilaritySearch 添加 type 过滤
-	topK := o.config.Knowledge.TopK
-	if topK == 0 {
-		topK = 3
-	}
-
-	docs, err := o.vectorStore.SimilaritySearch(callCtx, userID, agentID, query, topK)
-	if err != nil {
-		return nil, err
-	}
-
-	return docs, nil
-}
-
-// formatKnowledge 格式化知识库内容
-func (o *orchestrator) formatKnowledge(docs []rag.Doc) string {
-	if len(docs) == 0 {
-		return ""
-	}
-
-	var sb strings.Builder
-	sb.WriteString("【知识库】\n")
-	for i, doc := range docs {
-		if i >= o.config.Knowledge.TopK {
-			break
-		}
-		sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, truncate(doc.PageContent, 300)))
-	}
-	return sb.String()
-}

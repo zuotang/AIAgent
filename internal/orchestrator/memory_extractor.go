@@ -95,8 +95,15 @@ func ExtractMemories(
 
 【重要】只从"本轮对话"中提取，不要从"历史对话"中提取（历史对话仅供理解上下文）
 
-输出格式：
+输出格式（严格遵守JSON格式）：
 {"memories":[{"type":"relationship","key":"nickname","value":"小明","confidence":1.0,"also_vector":true,"owner":"user","text":"用户的昵称是小明","layer":1,"importance":0.9}]}
+
+【JSON格式要求】：
+- 每个记忆对象必须包含所有必需字段：type, key, value, confidence, also_vector, owner, text, layer, importance
+- key字段必须写成 "key":"字段名" 的格式，不能省略 "key":
+- 所有字符串值必须用双引号包围
+- 数字值不需要引号
+- 布尔值使用 true/false（小写，无引号）
 
 要求：
 - key用英文小写+下划线
@@ -151,6 +158,9 @@ func ExtractMemories(
 		fmt.Printf("extractor raw output: %s\n", text)
 	}
 
+	// 修复常见的JSON格式错误
+	text = fixCommonJSONErrors(text)
+
 	var out ExtractorOutput
 	if err := json.Unmarshal([]byte(text), &out); err != nil {
 		return nil, fmt.Errorf("extractor json unmarshal failed: %w, raw=%s", err, text)
@@ -168,6 +178,17 @@ func ExtractMemories(
 	}
 
 	return cleaned, nil
+}
+
+// fixCommonJSONErrors 修复LLM生成的常见JSON格式错误
+func fixCommonJSONErrors(text string) string {
+	// 修复缺少 "key": 的情况
+	// 例如: {"type":"state","user_age","value":18} -> {"type":"state","key":"user_age","value":18}
+	// 匹配模式: "type":"xxx","<字段名>","value"
+	re := regexp.MustCompile(`("type"\s*:\s*"[^"]+"\s*,\s*)"([a-z_][a-z0-9_]*)"(\s*,\s*"value")`)
+	text = re.ReplaceAllString(text, `$1"key":"$2"$3`)
+
+	return text
 }
 
 // normalize 归一化记忆字段
@@ -306,4 +327,17 @@ func sanitizeAndFilter(ms []memory.ExtractedMemory) []memory.ExtractedMemory {
 	}
 
 	return out
+}
+
+// fingerprint 生成记忆指纹用于去重
+func fingerprint(owner, typ, key, val string) string {
+	return fmt.Sprintf("%s:%s:%s:%s", owner, typ, key, val)
+}
+
+// truncate 截断字符串到指定长度
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }

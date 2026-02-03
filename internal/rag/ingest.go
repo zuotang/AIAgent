@@ -213,7 +213,6 @@ func (i *Ingestor) ingestChunk(ctx context.Context, chunk *utils.Chunk) error {
 		payload := map[string]any{
 			"agent_id": i.AgentID, // 知识库只需要 agent_id，不需要 user_id
 			"text":     chunk.Content,
-			"type":     "knowledge", // 标记为知识类型
 			"ts":       time.Now().Format(time.RFC3339),
 		}
 
@@ -227,15 +226,15 @@ func (i *Ingestor) ingestChunk(ctx context.Context, chunk *utils.Chunk) error {
 		body := map[string]any{
 			"points": []any{
 				map[string]any{
-					"id":     pointID,
-					"vector": vec,
+					"id":      pointID,
+					"vector":  vec,
 					"payload": payload,
 				},
 			},
 		}
 
-		// 调用 Qdrant API 存储向量
-		if err = i.store.UpsertPointToCollection(ctx, body, i.store.Collection); err != nil {
+		// 调用 Qdrant API 存储向量到知识库集合
+		if err = i.store.UpsertPointToCollection(ctx, body, i.store.KnowledgeCollection); err != nil {
 			lastErr = fmt.Errorf("failed to upsert point: %v", err)
 			if j < i.MaxRetries {
 				backoff := time.Duration(j+1) * 500 * time.Millisecond

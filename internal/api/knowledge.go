@@ -13,7 +13,6 @@ import (
 
 // IngestRequest 录入请求结构
 type IngestRequest struct {
-	UserID       string `json:"user_id" validate:"required"`
 	AgentID      uint   `json:"agent_id"` // Agent ID，默认为1
 	Path         string `json:"path" validate:"required"`
 	ChunkSize    int    `json:"chunk_size"`
@@ -22,7 +21,6 @@ type IngestRequest struct {
 
 // IngestTextRequest 文本录入请求结构
 type IngestTextRequest struct {
-	UserID       string `json:"user_id" validate:"required"`
 	AgentID      uint   `json:"agent_id"` // Agent ID，默认为1
 	Text         string `json:"text" validate:"required"`
 	FileName     string `json:"file_name"`
@@ -32,7 +30,6 @@ type IngestTextRequest struct {
 
 // QueryRequest 查询请求结构
 type QueryRequest struct {
-	UserID         string  `json:"user_id" validate:"required"`
 	AgentID        uint    `json:"agent_id"` // Agent ID，默认为1
 	Query          string  `json:"query" validate:"required"`
 	Limit          int     `json:"limit"`
@@ -45,7 +42,7 @@ type KnowledgeService interface {
 	IngestDirectory(ctx context.Context, req IngestRequest) error
 	IngestText(ctx context.Context, req IngestTextRequest) error
 	Query(ctx context.Context, req QueryRequest) ([]rag.Doc, error)
-	List(ctx context.Context, userID string) ([]string, error)
+	List(ctx context.Context, agentID uint) ([]string, error)
 	HandleIngestFile(c echo.Context) error
 	HandleIngestDirectory(c echo.Context) error
 	HandleIngestText(c echo.Context) error
@@ -73,8 +70,8 @@ func (s *KnowledgeServiceImpl) IngestFile(ctx context.Context, req IngestRequest
 	if req.AgentID == 0 {
 		req.AgentID = 1
 	}
-	// 创建临时录入器，使用请求中的 UserID 和 AgentID
-	tempIngestor := rag.NewIngestor(s.store, req.ChunkSize, req.ChunkOverlap, rag.ChunkingStrategyTokens, req.UserID)
+	// 创建临时录入器，使用请求中的 AgentID（知识库不需要 UserID）
+	tempIngestor := rag.NewIngestor(s.store, req.ChunkSize, req.ChunkOverlap, rag.ChunkingStrategyTokens, "")
 	tempIngestor.SetAgentID(req.AgentID)
 	return tempIngestor.IngestFile(ctx, req.Path)
 }
@@ -85,8 +82,8 @@ func (s *KnowledgeServiceImpl) IngestDirectory(ctx context.Context, req IngestRe
 	if req.AgentID == 0 {
 		req.AgentID = 1
 	}
-	// 创建临时录入器，使用请求中的 UserID 和 AgentID
-	tempIngestor := rag.NewIngestor(s.store, req.ChunkSize, req.ChunkOverlap, rag.ChunkingStrategyTokens, req.UserID)
+	// 创建临时录入器，使用请求中的 AgentID（知识库不需要 UserID）
+	tempIngestor := rag.NewIngestor(s.store, req.ChunkSize, req.ChunkOverlap, rag.ChunkingStrategyTokens, "")
 	tempIngestor.SetAgentID(req.AgentID)
 	return tempIngestor.IngestDirectory(ctx, req.Path)
 }
@@ -111,8 +108,8 @@ func (s *KnowledgeServiceImpl) IngestText(ctx context.Context, req IngestTextReq
 		return fmt.Errorf("no chunks created from text")
 	}
 
-	// 录入文本分块
-	return s.store.UpsertTexts(ctx, req.UserID, req.AgentID, chunks, req.FileName)
+	// 录入文本分块到知识库（不需要 user_id）
+	return s.store.UpsertKnowledgeTexts(ctx, req.AgentID, chunks, req.FileName)
 }
 
 // Query 实现知识库查询功能
@@ -125,13 +122,18 @@ func (s *KnowledgeServiceImpl) Query(ctx context.Context, req QueryRequest) ([]r
 		req.AgentID = 1
 	}
 
-	return s.store.SimilaritySearch(ctx, req.UserID, req.AgentID, req.Query, req.Limit)
+	// 使用知识库搜索（不需要 user_id）
+	return s.store.SimilaritySearchKnowledge(ctx, req.AgentID, req.Query, req.Limit)
 }
 
 // List 实现知识库列表功能
-func (s *KnowledgeServiceImpl) List(ctx context.Context, userID string) ([]string, error) {
-	// 调用存储的 ListFiles 方法获取文件列表
-	return s.store.ListFiles(ctx, userID, 1)
+func (s *KnowledgeServiceImpl) List(ctx context.Context, agentID uint) ([]string, error) {
+	// 设置默认 AgentID
+	if agentID == 0 {
+		agentID = 1
+	}
+	// 调用存储的 ListFiles 方法获取文件列表（只需要 agent_id）
+	return s.store.ListFiles(ctx, agentID)
 }
 
 // HandleIngestFile 处理文件录入请求
@@ -225,14 +227,17 @@ func (s *KnowledgeServiceImpl) HandleKnowledgeQuery(c echo.Context) error {
 
 // HandleKnowledgeList 处理知识库列表请求
 func (s *KnowledgeServiceImpl) HandleKnowledgeList(c echo.Context) error {
-	// 获取用户ID
-	userID := c.QueryParam("user_id")
-	if userID == "" {
-		userID = "default"
+	// 获取 AgentID（从查询参数）
+	agentID := uint(1) // 默认值
+	if agentIDStr := c.QueryParam("agent_id"); agentIDStr != "" {
+		var id uint
+		if _, err := fmt.Sscanf(agentIDStr, "%d", &id); err == nil {
+			agentID = id
+		}
 	}
 
 	// 处理请求
-	files, err := s.List(c.Request().Context(), userID)
+	files, err := s.List(c.Request().Context(), agentID)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
