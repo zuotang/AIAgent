@@ -10,6 +10,7 @@ import (
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"gorm.io/gorm/logger"
 
 	// 导入 modernc.org/sqlite 驱动（纯 Go 实现，无需 CGO）
@@ -372,39 +373,32 @@ func (s *Store) UpsertExtractedMemories(ctx context.Context, userID string, agen
 		now := time.Now()
 
 		for _, m := range memories {
-			// 先查询是否存在
-			var existing Memory
-			err := tx.Where("user_id = ? AND agent_id = ? AND mtype = ? AND mkey = ? AND owner = ?",
-				userID, agentID, m.Type, m.Key, m.Owner).
-				First(&existing).Error
+			memory := &Memory{
+				UserID:     userID,
+				AgentID:    agentID,
+				Type:       m.Type,
+				Key:        m.Key,
+				Value:      m.Value,
+				Confidence: m.Confidence,
+				Owner:      m.Owner,
+				UpdatedAt:  now,
+			}
 
-			if err == gorm.ErrRecordNotFound {
-				// 不存在，创建新记录
-				memory := &Memory{
-					UserID:     userID,
-					AgentID:    agentID,
-					Type:       m.Type,
-					Key:        m.Key,
-					Value:      m.Value,
-					Confidence: m.Confidence,
-					Owner:      m.Owner,
-					UpdatedAt:  now,
-				}
-				if err := tx.Create(memory).Error; err != nil {
-					return err
-				}
-			} else if err != nil {
-				// 查询出错
+			// 使用 GORM 的 Clauses 来处理冲突
+			// 如果记录已存在（基于唯一约束），则更新 value, confidence, updated_at
+			err := tx.Clauses(clause.OnConflict{
+				Columns: []clause.Column{
+					{Name: "user_id"},
+					{Name: "agent_id"},
+					{Name: "mtype"},
+					{Name: "mkey"},
+					{Name: "owner"},
+				},
+				DoUpdates: clause.AssignmentColumns([]string{"mvalue", "confidence", "updated_at"}),
+			}).Create(memory).Error
+
+			if err != nil {
 				return err
-			} else {
-				// 存在，更新记录
-				if err := tx.Model(&existing).Updates(map[string]interface{}{
-					"mvalue":     m.Value,
-					"confidence": m.Confidence,
-					"updated_at": now,
-				}).Error; err != nil {
-					return err
-				}
 			}
 		}
 
