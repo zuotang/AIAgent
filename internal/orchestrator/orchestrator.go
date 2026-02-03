@@ -31,19 +31,21 @@ type Orchestrator interface {
 
 // orchestrator 编排器，负责协调各个组件
 type orchestrator struct {
-	config       *config.Config
-	llmClient    models.LLMClient
-	ollamaClient *models.Client
-	memStore     *memory.Store
-	vectorStore  *rag.QdrantStore
-	agent        agent.Agent
-	chatModel    string
+	config           *config.Config
+	llmClient        models.LLMClient
+	classifierClient models.LLMClient // 独立的分类器客户端
+	ollamaClient     *models.Client
+	memStore         *memory.Store
+	vectorStore      *rag.QdrantStore
+	agent            agent.Agent
+	chatModel        string
 }
 
 // New 创建新的编排器
 func New(
 	cfg *config.Config,
 	llmClient models.LLMClient,
+	classifierClient models.LLMClient,
 	ollamaClient *models.Client,
 	memStore *memory.Store,
 	vectorStore *rag.QdrantStore,
@@ -51,13 +53,14 @@ func New(
 	chatModel string,
 ) Orchestrator {
 	return &orchestrator{
-		config:       cfg,
-		llmClient:    llmClient,
-		ollamaClient: ollamaClient,
-		memStore:     memStore,
-		vectorStore:  vectorStore,
-		agent:        ag,
-		chatModel:    chatModel,
+		config:           cfg,
+		llmClient:        llmClient,
+		classifierClient: classifierClient,
+		ollamaClient:     ollamaClient,
+		memStore:         memStore,
+		vectorStore:      vectorStore,
+		agent:            ag,
+		chatModel:        chatModel,
 	}
 }
 
@@ -1016,9 +1019,9 @@ func (o *orchestrator) classifyQueryType(ctx context.Context, userText string) s
 		{Role: "user", Content: prompt},
 	}
 
-	// 使用配置的分类器模型
+	// 使用独立的分类器客户端
 	classifierModel := o.config.Classifier.Model
-	response, err := o.llmClient.Chat(classifyCtx, msgs, classifierModel)
+	response, err := o.classifierClient.Chat(classifyCtx, msgs, classifierModel)
 	if err != nil {
 		if o.config.Base.Debug {
 			log.Printf("[DEBUG] 查询分类失败: %v，默认使用 NONE\n", err)

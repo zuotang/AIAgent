@@ -56,6 +56,10 @@ func main() {
 	log.Println("Initializing LLM client...")
 	llmClient, chatModel := initLLMClient(cfg)
 
+	// 初始化分类器客户端
+	log.Println("Initializing classifier client...")
+	classifierClient := initClassifierClient(cfg)
+
 	// 初始化 Ollama 客户端（用于 Embedding）
 	log.Println("Initializing Ollama client for embedding...")
 	ollamaClient := initOllamaClient(cfg)
@@ -91,7 +95,7 @@ func main() {
 
 	// 创建编排器
 	log.Println("Creating orchestrator...")
-	orch := orchestrator.New(cfg, llmClient, ollamaClient, memStore, vectorStore, ag, chatModel)
+	orch := orchestrator.New(cfg, llmClient, classifierClient, ollamaClient, memStore, vectorStore, ag, chatModel)
 	log.Println("Orchestrator created successfully")
 
 	// 初始化服务
@@ -223,6 +227,33 @@ func initLLMClient(cfg *config.Config) (models.LLMClient, string) {
 	}
 
 	return llmClient, chatModel
+}
+
+// initClassifierClient 初始化分类器客户端
+func initClassifierClient(cfg *config.Config) models.LLMClient {
+	var classifierClient models.LLMClient
+
+	switch cfg.Classifier.Provider {
+	case "deepseek":
+		deepseek := models.NewDeepSeek(cfg.Classifier.BaseURL, cfg.Classifier.APIKey, cfg.Classifier.Model)
+		deepseek.SetDebug(cfg.Base.Debug)
+		classifierClient = deepseek
+		log.Printf("分类器使用 DeepSeek (base_url: %s, model: %s)", cfg.Classifier.BaseURL, cfg.Classifier.Model)
+	case "anthropic":
+		anthropic := models.NewAnthropic(cfg.Classifier.BaseURL, cfg.Classifier.Model, cfg.Embedding.Model)
+		anthropic.SetDebug(cfg.Base.Debug)
+		classifierClient = anthropic
+		log.Printf("分类器使用 Anthropic (base_url: %s, model: %s)", cfg.Classifier.BaseURL, cfg.Classifier.Model)
+	case "ollama":
+		ollama := models.New(cfg.Classifier.BaseURL, cfg.Classifier.Model, cfg.Embedding.Model)
+		ollama.SetDebug(cfg.Base.Debug)
+		classifierClient = ollama
+		log.Printf("分类器使用 Ollama (base_url: %s, model: %s)", cfg.Classifier.BaseURL, cfg.Classifier.Model)
+	default:
+		log.Fatalf("Unknown classifier provider: %s. Use 'ollama', 'deepseek', or 'anthropic'", cfg.Classifier.Provider)
+	}
+
+	return classifierClient
 }
 
 // initOllamaClient 初始化Ollama客户端（用于Embedding）
