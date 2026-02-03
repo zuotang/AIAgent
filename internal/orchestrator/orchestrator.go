@@ -231,7 +231,10 @@ func (o *orchestrator) ProcessMessage(
 	if err != nil && o.config.Base.Debug {
 		log.Printf("[DEBUG] 保存用户消息失败: %v", err)
 	}
-	assistantMsgID, err := o.memStore.SaveChatMessage(ctx, userID, "assistant", output.Response, sessionID, agentID)
+
+	// 移除thinking标签后再保存助手响应
+	cleanedResponse := removeThinkingTags(output.Response)
+	assistantMsgID, err := o.memStore.SaveChatMessage(ctx, userID, "assistant", cleanedResponse, sessionID, agentID)
 	if err != nil && o.config.Base.Debug {
 		log.Printf("[DEBUG] 保存助手响应失败: %v", err)
 	}
@@ -242,9 +245,9 @@ func (o *orchestrator) ProcessMessage(
 		if err == nil {
 			// 如果未触发压缩，需要追加本次对话到压缩上下文
 			if !shouldCompress {
-				// 构建本次对话内容
+				// 构建本次对话内容（使用清理后的响应）
 				cleanUser := utils.PreprocessLite(userText)
-				cleanAssistant := utils.PreprocessLite(output.Response)
+				cleanAssistant := utils.PreprocessLite(cleanedResponse)
 				currentTurn := fmt.Sprintf("User: %s\nAssistant: %s", cleanUser, cleanAssistant)
 				// 追加到压缩上下文
 				lastCompressed.CompressedText = lastCompressed.CompressedText + "\n\n" + currentTurn
@@ -426,7 +429,10 @@ func (o *orchestrator) ProcessMessageStream(
 	if err != nil && o.config.Base.Debug {
 		log.Printf("[DEBUG] 保存用户消息失败: %v", err)
 	}
-	assistantMsgID, err := o.memStore.SaveChatMessage(ctx, userID, "assistant", output.Response, sessionID, agentID)
+
+	// 移除thinking标签后再保存助手响应
+	cleanedResponseStream := removeThinkingTags(output.Response)
+	assistantMsgID, err := o.memStore.SaveChatMessage(ctx, userID, "assistant", cleanedResponseStream, sessionID, agentID)
 	if err != nil && o.config.Base.Debug {
 		log.Printf("[DEBUG] 保存助手响应失败: %v", err)
 	}

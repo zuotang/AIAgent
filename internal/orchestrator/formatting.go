@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 
 	"agent-langchain/internal/rag"
@@ -73,4 +74,29 @@ func (o *orchestrator) showContextStats(
 		o.chatModel,
 	)
 	log.Print(utils.FormatContextStats(stats))
+}
+
+// removeThinkingTags 移除LLM响应中的thinking标签及其内容
+// 支持多种thinking标签格式：<think>...</think>, <thinking>...</thinking>, <thinking_mode>...</thinking_mode>
+func removeThinkingTags(text string) string {
+	// 定义需要移除的thinking标签模式
+	patterns := []string{
+		`<think>[\s\S]*?</think>`,           // <think>...</think>
+		`<thinking>[\s\S]*?</thinking>`,     // <thinking>...</thinking>
+		`<thinking_mode>[\s\S]*?</thinking_mode>`, // <thinking_mode>...</thinking_mode>
+	}
+
+	result := text
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		result = re.ReplaceAllString(result, "")
+	}
+
+	// 清理多余的空行（连续的换行符）
+	result = regexp.MustCompile(`\n{3,}`).ReplaceAllString(result, "\n\n")
+
+	// 清理首尾空白
+	result = strings.TrimSpace(result)
+
+	return result
 }
