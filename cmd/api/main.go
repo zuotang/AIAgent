@@ -48,7 +48,7 @@ func main() {
 
 	// 中间件
 	log.Println("Configuring middleware...")
-	e.Use(middleware.Logger())
+	e.Use(middleware.RequestLogger())
 	e.Use(middleware.Recover())
 	e.Use(middleware.CORS())
 

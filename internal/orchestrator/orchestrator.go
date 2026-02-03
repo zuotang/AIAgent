@@ -199,7 +199,6 @@ func (o *orchestrator) ProcessMessage(
 			knowledgeText = o.formatKnowledge(knowledgeDocs)
 			if o.config.Base.Debug {
 				log.Printf("[DEBUG] 知识库已加载")
-				log.Printf("[DEBUG] 知识库文档内容: %s", knowledgeDocs[0])
 			}
 		}
 	}
@@ -805,7 +804,7 @@ func (o *orchestrator) storeSemanticMemories(
 	callCtx, cancel := context.WithTimeout(ctx, time.Duration(o.config.Base.Timeout)*time.Second)
 	defer cancel()
 
-	if err := o.vectorStore.UpsertTexts(callCtx, userID, agentID, vectorTexts, ""); err != nil {
+	if err := o.vectorStore.UpsertMemoryTexts(callCtx, userID, agentID, vectorTexts); err != nil {
 		if o.config.Base.Debug {
 			log.Printf("写入 Qdrant 失败: %v\n", err)
 		}
@@ -996,7 +995,7 @@ func (o *orchestrator) classifyQueryType(ctx context.Context, userText string) s
 	defer cancel()
 
 	// 构建分类提示词
-	prompt := fmt.Sprintf(`分析用户的查询，判断需要什么类型的上下文来回答。
+	prompt := fmt.Sprintf(`分析用户的查询，判断需要什么类型的上下文来回答。如果是一个听不懂的名词就需要调用知识库来回答。
 
 上下文类型：
 1. MEMORY（记忆）：用户的个人信息、偏好、历史对话、过往互动

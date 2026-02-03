@@ -51,11 +51,11 @@ extractor:
 classifier:
   provider: ollama  # 分类器提供商: ollama, deepseek, custom
   base_url: http://127.0.0.1:11434  # 分类器服务地址
-  model: GLM4.7:1B   # 分类器模型（建议使用小模型）
+  model: Gemma3:4B   # 分类器模型（建议使用小模型）
   api_key: ""  # API Key（如果需要）
   # 分类器特定配置
   temperature: 0.0  # 温度（分类任务建议 0 温度）
-  timeout: 10       # 超时时间（秒，分类任务应该快速）
+  timeout: 60       # 超时时间（秒，分类任务应该快速）
 
 # 存储配置
 storage:
@@ -101,7 +101,6 @@ memory:
 knowledge:
   enable_routing: true  # 启用智能路由（使用小模型判断是否需要检索知识库）
   top_k: 3              # 知识库检索返回的最大结果数
-  classifier_timeout: 100  # 分类器超时（毫秒，快速分类）
 
 # 性能配置
 performance:

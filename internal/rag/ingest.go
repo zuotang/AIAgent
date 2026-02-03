@@ -211,8 +211,7 @@ func (i *Ingestor) ingestChunk(ctx context.Context, chunk *utils.Chunk) error {
 
 		// 创建元数据
 		payload := map[string]any{
-			"user_id":  i.UserID,
-			"agent_id": i.AgentID, // 添加 agent_id 以支持过滤
+			"agent_id": i.AgentID, // 知识库只需要 agent_id，不需要 user_id
 			"text":     chunk.Content,
 			"type":     "knowledge", // 标记为知识类型
 			"ts":       time.Now().Format(time.RFC3339),
