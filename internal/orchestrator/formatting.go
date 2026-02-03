@@ -76,9 +76,9 @@ func (o *orchestrator) showContextStats(
 	log.Print(utils.FormatContextStats(stats))
 }
 
-// RemoveThinkingTags 移除LLM响应中的thinking标签及其内容
+// removeThinkingTags 移除LLM响应中的thinking标签及其内容
 // 支持多种thinking标签格式：<think>...</think>, <thinking>...</thinking>, <thinking_mode>...</thinking_mode>
-func RemoveThinkingTags(text string) string {
+func removeThinkingTags(text string) string {
 	// 定义需要移除的thinking标签模式
 	patterns := []string{
 		`<think>[\s\S]*?</think>`,           // <think>...</think>
@@ -99,9 +99,4 @@ func RemoveThinkingTags(text string) string {
 	result = strings.TrimSpace(result)
 
 	return result
-}
-
-// removeThinkingTags 内部使用的小写版本，保持向后兼容
-func removeThinkingTags(text string) string {
-	return RemoveThinkingTags(text)
 }
