@@ -992,8 +992,8 @@ func (o *orchestrator) classifyQueryType(ctx context.Context, userText string) s
 		return "NONE"
 	}
 
-	// 创建超时上下文（快速分类，默认100ms）
-	timeout := time.Duration(o.config.Knowledge.ClassifierTimeout) * time.Millisecond
+	// 创建超时上下文（使用分类器配置的超时时间）
+	timeout := time.Duration(o.config.Classifier.Timeout) * time.Second
 	classifyCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 

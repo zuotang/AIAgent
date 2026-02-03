@@ -147,9 +147,8 @@ type MemoryConfig struct {
 
 // KnowledgeConfig 知识库配置
 type KnowledgeConfig struct {
-	EnableRouting     bool `yaml:"enable_routing"`      // 启用智能路由
-	TopK              int  `yaml:"top_k"`               // 检索数量
-	ClassifierTimeout int  `yaml:"classifier_timeout"`  // 分类器超时（毫秒）
+	EnableRouting bool `yaml:"enable_routing"` // 启用智能路由
+	TopK          int  `yaml:"top_k"`          // 检索数量
 }
 
 // Load 从文件加载配置
@@ -326,9 +325,6 @@ func (c *Config) setDefaults() {
 	// 知识库配置默认值
 	if c.Knowledge.TopK == 0 {
 		c.Knowledge.TopK = 3
-	}
-	if c.Knowledge.ClassifierTimeout == 0 {
-		c.Knowledge.ClassifierTimeout = 2000 // 2000ms (2秒) 适合小模型分类
 	}
 }
 
