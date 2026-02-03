@@ -328,7 +328,7 @@ func (c *Config) setDefaults() {
 		c.Knowledge.TopK = 3
 	}
 	if c.Knowledge.ClassifierTimeout == 0 {
-		c.Knowledge.ClassifierTimeout = 100 // 100ms for fast classification
+		c.Knowledge.ClassifierTimeout = 2000 // 2000ms (2秒) 适合小模型分类
 	}
 }
 
