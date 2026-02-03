@@ -199,6 +199,7 @@ func (o *orchestrator) ProcessMessage(
 			knowledgeText = o.formatKnowledge(knowledgeDocs)
 			if o.config.Base.Debug {
 				log.Printf("[DEBUG] 知识库已加载")
+				log.Printf("[DEBUG] 知识库文档内容: %s", knowledgeDocs[0])
 			}
 		}
 	}
@@ -931,13 +932,10 @@ func (o *orchestrator) shouldExtractByLLM(userText, assistantText string) bool {
 	msgs := []models.ChatMessage{
 		{Role: "user", Content: prompt},
 	}
-	println("====分类器模型", o.config.Classifier.Model)
-	//我这里想打印o.llmClient是哪个客户端
-	println("====分类器客户端", o.llmClient)
 
-	// 使用配置的分类器模型
+	// 使用独立的分类器客户端
 	classifierModel := o.config.Classifier.Model
-	response, err := o.llmClient.Chat(ctx, msgs, classifierModel)
+	response, err := o.classifierClient.Chat(ctx, msgs, classifierModel)
 	if err != nil {
 		if o.config.Base.Debug {
 			log.Printf("LLM 分类器调用失败: %v，回退到保守策略\n", err)
