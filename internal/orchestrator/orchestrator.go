@@ -164,8 +164,12 @@ func (o *orchestrator) ProcessMessage(
 	shouldCompress := ShouldCompressContextByTokens(stats, 60.0) // 保留约 40% 余量
 	if o.config.Base.Debug {
 		log.Printf("[DEBUG] 上下文占用率: %.1f%% (Total=%d, Limit=%d)", stats.UsagePercent, stats.TotalTokens, stats.ModelLimit)
+		var lastCompressedLen int
+		if lastCompressed != nil {
+			lastCompressedLen = len(lastCompressed.CompressedText)
+		}
 		log.Printf("[DEBUG] 上次压缩长度: %d, 新消息长度: %d, 总长度: %d",
-			len(lastCompressed.CompressedText), len(conversationHistory), len(fullContext))
+			lastCompressedLen, len(conversationHistory), len(fullContext))
 	}
 
 	if shouldCompress {
@@ -198,7 +202,7 @@ func (o *orchestrator) ProcessMessage(
 		// 未达到压缩阈值，使用完整上下文（上次压缩 + 新消息）
 		compressedContext = fullContext
 		if o.config.Base.Debug {
-			if lastCompressed.CompressedText != "" {
+			if lastCompressed != nil && lastCompressed.CompressedText != "" {
 				log.Printf("[DEBUG] 使用上次压缩 + 新消息作为上下文 - 总长度: %d", len(compressedContext))
 			} else {
 				log.Printf("[DEBUG] 首次对话或无压缩历史 - 使用原始上下文，长度: %d", len(conversationHistory))
@@ -357,8 +361,12 @@ func (o *orchestrator) ProcessMessageStream(
 	shouldCompressStream := ShouldCompressContextByTokens(stats, 60.0) // 保留约 40% 余量
 	if o.config.Base.Debug {
 		log.Printf("[DEBUG] 流式处理 - 上下文占用率: %.1f%% (Total=%d, Limit=%d)", stats.UsagePercent, stats.TotalTokens, stats.ModelLimit)
+		var lastCompressedLen int
+		if lastCompressedStream != nil {
+			lastCompressedLen = len(lastCompressedStream.CompressedText)
+		}
 		log.Printf("[DEBUG] 流式处理 - 上次压缩长度: %d, 新消息长度: %d, 总长度: %d",
-			len(lastCompressedStream.CompressedText), len(conversationHistory), len(fullContextStream))
+			lastCompressedLen, len(conversationHistory), len(fullContextStream))
 	}
 
 	if shouldCompressStream {
@@ -389,7 +397,7 @@ func (o *orchestrator) ProcessMessageStream(
 		// 未达到压缩阈值，使用完整上下文（上次压缩 + 新消息）
 		compressedContext = fullContextStream
 		if o.config.Base.Debug {
-			if lastCompressedStream.CompressedText != "" {
+			if lastCompressedStream != nil && lastCompressedStream.CompressedText != "" {
 				log.Printf("[DEBUG] 流式处理 - 使用上次压缩 + 新消息作为上下文 - 总长度: %d", len(compressedContext))
 			} else {
 				log.Printf("[DEBUG] 流式处理 - 首次对话或无压缩历史 - 使用原始上下文，长度: %d", len(conversationHistory))
