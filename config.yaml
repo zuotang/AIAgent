@@ -100,7 +100,7 @@ memory:
   min_message_length: 10      # 最小消息长度
   include_history_context: false  # 提取时包含历史上下文（false 避免重复提取）
   # 记忆质量控制
-  min_confidence: 0.65  # 最小置信度（低于此值的记忆不会存储到向量库）
+  min_confidence: 0.6  # 最小置信度（低于此值的记忆不会存储到向量库）
   max_memories_per_extraction: 20  # 每次提取的最大记忆数
 
 # 知识库智能路由配置

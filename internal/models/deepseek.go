@@ -130,7 +130,7 @@ func (c *DeepSeekClient) ChatStream(ctx context.Context, msgs []ChatMessage, mod
 
 		// 调试输出
 		if c.Debug {
-			fmt.Printf("\033[31m[DEBUG] 发送流式请求到 DeepSeek API (model: %s)\033[0m\n", useModel)
+			fmt.Printf("\033[31m[DEBUG] 发送流式请求到 DeepSeek API (model: %s, body: %s)\033[0m\n", useModel, string(b))
 		}
 
 		req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/chat/completions", bytes.NewReader(b))

@@ -149,7 +149,11 @@ func (o *orchestrator) retrieveKnowledgeOnly(
 		contextResult.KnowledgeDocs = knowledge
 		contextResult.KnowledgeText = o.formatKnowledge(knowledge)
 		if o.config.Base.Debug {
-			log.Printf("[DEBUG] 知识库已加载")
+			if len(knowledge) > 0 {
+				log.Printf("[DEBUG] 知识库已加载 (%d 条文档)", len(knowledge))
+			} else {
+				log.Printf("[DEBUG] 知识库检索完成，但所有文档都被过滤（相似度低于阈值 %.2f）", o.config.Knowledge.MinScore)
+			}
 		}
 	}
 
