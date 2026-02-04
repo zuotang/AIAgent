@@ -29,11 +29,13 @@ type EmbedClient interface {
 }
 
 type Client struct {
-	BaseURL   string
-	ChatModel string
-	EmbModel  string
-	HTTP      *http.Client
-	Debug     bool
+	BaseURL           string
+	ChatModel         string
+	EmbModel          string
+	HTTP              *http.Client
+	Debug             bool
+	Temperature       float64 // 温度参数
+	RepetitionPenalty float64 // 重复惩罚
 }
 
 // SetDebug 设置调试模式
@@ -64,11 +66,26 @@ func (c *Client) Chat(ctx context.Context, msgs []ChatMessage, model ...string) 
 		useModel = model[0]
 	}
 
+	// 构建options参数
+	options := make(map[string]any)
+	if c.Temperature > 0 {
+		options["temperature"] = c.Temperature
+	}
+	if c.RepetitionPenalty > 0 {
+		options["repeat_penalty"] = c.RepetitionPenalty
+	}
+
 	reqBody := map[string]any{
 		"model":    useModel,
 		"messages": msgs,
 		"stream":   false,
 	}
+
+	// 只有在有options时才添加
+	if len(options) > 0 {
+		reqBody["options"] = options
+	}
+
 	b, _ := json.Marshal(reqBody)
 
 	// 调试输出：发送的请求
@@ -124,11 +141,26 @@ func (c *Client) ChatStream(ctx context.Context, msgs []ChatMessage, model ...st
 			useModel = model[0]
 		}
 
+		// 构建options参数
+		options := make(map[string]any)
+		if c.Temperature > 0 {
+			options["temperature"] = c.Temperature
+		}
+		if c.RepetitionPenalty > 0 {
+			options["repeat_penalty"] = c.RepetitionPenalty
+		}
+
 		reqBody := map[string]any{
 			"model":    useModel,
 			"messages": msgs,
 			"stream":   true, // 启用流式模式
 		}
+
+		// 只有在有options时才添加
+		if len(options) > 0 {
+			reqBody["options"] = options
+		}
+
 		b, _ := json.Marshal(reqBody)
 
 		// 调试输出

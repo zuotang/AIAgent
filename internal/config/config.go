@@ -102,8 +102,10 @@ type RAGConfig struct {
 
 // OllamaConfig Ollama 配置
 type OllamaConfig struct {
-	BaseURL   string `yaml:"base_url"`
-	ChatModel string `yaml:"chat_model"`
+	BaseURL           string  `yaml:"base_url"`
+	ChatModel         string  `yaml:"chat_model"`
+	Temperature       float64 `yaml:"temperature"`        // 温度参数 (0.0-2.0)
+	RepetitionPenalty float64 `yaml:"repetition_penalty"` // 重复惩罚 (0.0-2.0)
 }
 
 // DeepSeekConfig DeepSeek 配置
@@ -115,9 +117,11 @@ type DeepSeekConfig struct {
 
 // AnthropicConfig Anthropic 配置
 type AnthropicConfig struct {
-	BaseURL   string `yaml:"base_url"`
-	APIKey    string `yaml:"api_key"`
-	ChatModel string `yaml:"chat_model"`
+	BaseURL           string  `yaml:"base_url"`
+	APIKey            string  `yaml:"api_key"`
+	ChatModel         string  `yaml:"chat_model"`
+	Temperature       float64 `yaml:"temperature"`        // 温度参数 (0.0-2.0)
+	RepetitionPenalty float64 `yaml:"repetition_penalty"` // 重复惩罚 (0.0-2.0)
 }
 
 // QdrantConfig Qdrant 配置

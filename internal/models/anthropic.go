@@ -18,12 +18,14 @@ type UserChatMessage struct {
 }
 
 type AnthropicClient struct {
-	BaseURL   string
-	APIKey    string
-	ChatModel string
-	HTTP      *http.Client
-	EmbModel  string
-	Debug     bool
+	BaseURL           string
+	APIKey            string
+	ChatModel         string
+	HTTP              *http.Client
+	EmbModel          string
+	Debug             bool
+	Temperature       float64 // 温度参数
+	RepetitionPenalty float64 // 重复惩罚
 }
 
 func NewAnthropic(baseURL, chatModel, embModel string) *AnthropicClient {
@@ -47,12 +49,28 @@ func (c *AnthropicClient) Chat(ctx context.Context, msgs []ChatMessage, model ..
 	if len(model) > 0 && model[0] != "" {
 		useModel = model[0]
 	}
+
+	// 构建options参数
+	options := make(map[string]any)
+	if c.Temperature > 0 {
+		options["temperature"] = c.Temperature
+	}
+	if c.RepetitionPenalty > 0 {
+		options["repeat_penalty"] = c.RepetitionPenalty
+	}
 	prompt := convertMessagesToPrompt(msgs)
+	// 直接使用标准messages格式，让Ollama处理chat模板
 	reqBody := map[string]any{
 		"model":    useModel,
-		"messages": prompt,
+		"messages": prompt, // 使用原始messages，不转换
 		"stream":   false,
 	}
+
+	// 只有在有options时才添加
+	if len(options) > 0 {
+		reqBody["options"] = options
+	}
+
 	b, _ := json.Marshal(reqBody)
 
 	// 调试输出：发送的请求
@@ -107,12 +125,28 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, msgs []ChatMessage, mo
 		if len(model) > 0 && model[0] != "" {
 			useModel = model[0]
 		}
+
+		// 构建options参数
+		options := make(map[string]any)
+		if c.Temperature > 0 {
+			options["temperature"] = c.Temperature
+		}
+		if c.RepetitionPenalty > 0 {
+			options["repeat_penalty"] = c.RepetitionPenalty
+		}
 		prompts := convertMessagesToPrompt(msgs)
+		// 直接使用标准messages格式，让Ollama处理chat模板
 		reqBody := map[string]any{
 			"model":    useModel,
-			"messages": prompts,
-			"stream":   true, // 启用流式模式
+			"messages": prompts, // 使用原始messages，不转换
+			"stream":   true,
 		}
+
+		// 只有在有options时才添加
+		if len(options) > 0 {
+			reqBody["options"] = options
+		}
+
 		b, _ := json.Marshal(reqBody)
 
 		// 调试输出

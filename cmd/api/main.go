@@ -25,7 +25,7 @@ import (
 
 func main() {
 	// 解析命令行参数
-	configFile := flag.String("config", "config.com.yaml", "配置文件路径")
+	configFile := flag.String("config", "config.yaml", "配置文件路径")
 	flag.Parse()
 
 	log.Println("Starting API server...")
@@ -213,12 +213,16 @@ func initLLMClient(cfg *config.Config) (models.LLMClient, string) {
 	case "anthropic":
 		anthropic := models.NewAnthropic(cfg.LLM.Anthropic.BaseURL, cfg.LLM.Anthropic.ChatModel, cfg.Embedding.Model)
 		anthropic.SetDebug(cfg.Base.Debug)
+		anthropic.Temperature = cfg.LLM.Anthropic.Temperature
+		anthropic.RepetitionPenalty = cfg.LLM.Anthropic.RepetitionPenalty
 		llmClient = anthropic
 		chatModel = cfg.LLM.Anthropic.ChatModel
 		log.Printf("使用 Anthropic API (base_url: %s, model: %s)", cfg.LLM.Anthropic.BaseURL, chatModel)
 	case "ollama":
 		ollama := models.New(cfg.LLM.Ollama.BaseURL, cfg.LLM.Ollama.ChatModel, cfg.Embedding.Model)
 		ollama.SetDebug(cfg.Base.Debug)
+		ollama.Temperature = cfg.LLM.Ollama.Temperature
+		ollama.RepetitionPenalty = cfg.LLM.Ollama.RepetitionPenalty
 		llmClient = ollama
 		chatModel = cfg.LLM.Ollama.ChatModel
 		log.Printf("使用 Ollama (model: %s)", chatModel)

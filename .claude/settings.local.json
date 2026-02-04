@@ -20,7 +20,9 @@
       "Bash(bash:*)",
       "Bash(tasklist:*)",
       "Bash(sqlite3:*)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "Bash(findstr:*)",
+      "Bash(git checkout:*)"
     ]
   }
 }
