@@ -13,9 +13,9 @@ llm:
     base_url: http://127.0.0.1:11434  # Claude API 基础 URL
     api_key: ""  # 在这里填入你的 Claude API Key
     #chat_model: Rocinante-XU:12b # 聊天模型
-    #chat_model: Mistral-Nemo-MixU:12b 
+    chat_model: Mistral-Nemo-MixU:12b 
     #chat_model: Qwen3-THU:4b 
-    chat_model: Llama3.2-U:24B
+    #chat_model: Llama3.2-U:24B
     temperature: 0.2            # 温度参数 (0.0-2.0)，越高越随机，越低越确定
     repetition_penalty: 1.5       # 重复惩罚 (0.0-2.0)，越高越避免重复
   # Ollama 配置
