@@ -2,6 +2,7 @@
 # 数据库文件
 *.db
 memory.db
+./memory.db
 
 # 配置文件（包含敏感信息）
 # config.yaml
