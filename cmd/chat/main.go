@@ -88,6 +88,7 @@ func main() {
 	// 初始化组件
 	llmClient, chatModel := initLLMClient(cfg)
 	classifierClient := initClassifierClient(cfg)
+	extractorClient := initExtractorClient(cfg)
 	ollamaClient := initOllamaClient(cfg)
 	memStore := initMemoryStore(cfg)
 	defer memStore.Close()
@@ -97,7 +98,7 @@ func main() {
 	ag := agent.NewConversationalAgent(llmClient, cfg.Base.Debug, cfg.Base.Timeout)
 
 	// 创建编排器
-	orch := orchestrator.New(cfg, llmClient, classifierClient, ollamaClient, memStore, vectorStore, ag, chatModel)
+	orch := orchestrator.New(cfg, llmClient, classifierClient, extractorClient, ollamaClient, memStore, vectorStore, ag, chatModel)
 
 	// 运行对话循环
 	runConversationLoop(ctx, orch, cfg)
@@ -159,6 +160,68 @@ func initClassifierClient(cfg *config.Config) models.LLMClient {
 	}
 
 	return classifierClient
+}
+
+// initExtractorClient 初始化记忆提取器客户端
+func initExtractorClient(cfg *config.Config) models.LLMClient {
+	var extractorClient models.LLMClient
+
+	// 如果未配置 extractor.provider，使用主 LLM 客户端的配置
+	provider := cfg.Extractor.Provider
+	if provider == "" {
+		provider = cfg.Base.Provider
+		log.Printf("extractor.provider 未配置，使用主 LLM provider: %s", provider)
+	}
+
+	switch provider {
+	case "deepseek":
+		baseURL := cfg.Extractor.BaseURL
+		if baseURL == "" {
+			baseURL = cfg.LLM.DeepSeek.BaseURL
+		}
+		apiKey := cfg.Extractor.APIKey
+		if apiKey == "" {
+			apiKey = cfg.LLM.DeepSeek.APIKey
+		}
+		model := cfg.Extractor.Model
+		if model == "" {
+			model = cfg.LLM.DeepSeek.ChatModel
+		}
+		deepseek := models.NewDeepSeek(baseURL, apiKey, model)
+		deepseek.SetDebug(cfg.Base.Debug)
+		extractorClient = deepseek
+		log.Printf("记忆提取器使用 DeepSeek (base_url: %s, model: %s)", baseURL, model)
+	case "anthropic":
+		baseURL := cfg.Extractor.BaseURL
+		if baseURL == "" {
+			baseURL = cfg.LLM.Anthropic.BaseURL
+		}
+		model := cfg.Extractor.Model
+		if model == "" {
+			model = cfg.LLM.Anthropic.ChatModel
+		}
+		anthropic := models.NewAnthropic(baseURL, model, cfg.Embedding.Model)
+		anthropic.SetDebug(cfg.Base.Debug)
+		extractorClient = anthropic
+		log.Printf("记忆提取器使用 Anthropic (base_url: %s, model: %s)", baseURL, model)
+	case "ollama":
+		baseURL := cfg.Extractor.BaseURL
+		if baseURL == "" {
+			baseURL = cfg.LLM.Ollama.BaseURL
+		}
+		model := cfg.Extractor.Model
+		if model == "" {
+			model = cfg.LLM.Ollama.ChatModel
+		}
+		ollama := models.New(baseURL, model, cfg.Embedding.Model)
+		ollama.SetDebug(cfg.Base.Debug)
+		extractorClient = ollama
+		log.Printf("记忆提取器使用 Ollama (base_url: %s, model: %s)", baseURL, model)
+	default:
+		log.Fatalf("Unknown extractor provider: %s. Use 'ollama', 'deepseek', or 'anthropic'", provider)
+	}
+
+	return extractorClient
 }
 
 // initOllamaClient 初始化Ollama客户端（用于Embedding）

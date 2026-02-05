@@ -187,7 +187,7 @@ func (o *orchestrator) ProcessMessage(
 		}
 
 		// 只压缩新消息，CompressContextIncremental 会自动合并上次的压缩结果
-		compressed, err := CompressContextIncremental(ctx, o.llmClient, o.memStore, userID, agentID, conversationHistory, 0, compressorModel, 200)
+		compressed, err := CompressContextIncremental(ctx, o.extractorClient, o.memStore, userID, agentID, conversationHistory, 0, compressorModel, 200)
 		if err != nil {
 			if o.config.Base.Debug {
 				log.Printf("[DEBUG] 增量压缩失败: %v，使用原始上下文", err)
@@ -386,7 +386,7 @@ func (o *orchestrator) ProcessMessageStream(
 		}
 
 		// 只压缩新消息，CompressContextIncremental 会自动合并上次的压缩结果
-		compressed, err := CompressContextIncremental(ctx, o.llmClient, o.memStore, userID, agentID, conversationHistory, 0, compressorModel, 200)
+		compressed, err := CompressContextIncremental(ctx, o.extractorClient, o.memStore, userID, agentID, conversationHistory, 0, compressorModel, 200)
 		if err != nil {
 			if o.config.Base.Debug {
 				log.Printf("[DEBUG] 增量压缩失败: %v，使用原始上下文", err)
