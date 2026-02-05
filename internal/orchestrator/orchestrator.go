@@ -34,6 +34,7 @@ type orchestrator struct {
 	config           *config.Config
 	llmClient        models.LLMClient
 	classifierClient models.LLMClient // 独立的分类器客户端
+	extractorClient  models.LLMClient // 独立的记忆提取器客户端
 	ollamaClient     *models.Client
 	memStore         *memory.Store
 	vectorStore      *rag.QdrantStore
@@ -46,6 +47,7 @@ func New(
 	cfg *config.Config,
 	llmClient models.LLMClient,
 	classifierClient models.LLMClient,
+	extractorClient models.LLMClient,
 	ollamaClient *models.Client,
 	memStore *memory.Store,
 	vectorStore *rag.QdrantStore,
@@ -56,6 +58,7 @@ func New(
 		config:           cfg,
 		llmClient:        llmClient,
 		classifierClient: classifierClient,
+		extractorClient:  extractorClient,
 		ollamaClient:     ollamaClient,
 		memStore:         memStore,
 		vectorStore:      vectorStore,
@@ -510,7 +513,7 @@ func (o *orchestrator) extractAndStoreMemories(
 	// 提取记忆
 	memories, err := ExtractMemories(
 		ctx,
-		o.llmClient,
+		o.extractorClient, // 使用独立的记忆提取器客户端
 		conversationHistory,
 		userText,
 		assistantText,

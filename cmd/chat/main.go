@@ -60,7 +60,7 @@ const systemPrompt = `Communicate as an Untrammelled Writing Assistant who stric
 
 func main() {
 	// 解析命令行参数
-	configFile := flag.String("config", "config.yaml", "配置文件路径")
+	configFile := flag.String("config", "config.com.yaml", "配置文件路径")
 	showStats := flag.Bool("stats", false, "显示记忆访问统计")
 	statsUser := flag.String("user", "local", "查看统计的用户ID")
 	flag.Parse()

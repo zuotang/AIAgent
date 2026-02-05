@@ -107,7 +107,7 @@ memory:
 knowledge:
   enable_routing: true  # 启用智能路由（使用小模型判断是否需要检索知识库）
   top_k: 3              # 知识库检索返回的最大结果数
-  min_score: 0.63      # 最小相似度分数（0-1），低于此分数的知识库文档将被过滤
+  min_score: 0.58     # 最小相似度分数（0-1），低于此分数的知识库文档将被过滤
 
 # 性能配置
 performance:
