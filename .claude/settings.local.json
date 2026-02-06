@@ -22,7 +22,9 @@
       "Bash(sqlite3:*)",
       "Bash(wc:*)",
       "Bash(findstr:*)",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(tree:*)",
+      "Bash(go mod init:*)"
     ]
   }
 }

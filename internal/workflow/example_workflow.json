@@ -1,0 +1,73 @@
+{
+  "version": "1.0",
+  "meta": {
+    "id": "example-wf-001",
+    "name": "Simple LLM Workflow"
+  },
+  "nodes": {
+    "time-node": {
+      "id": "time-node",
+      "type": "Tool.Time.Now",
+      "version": "1.0",
+      "params": {
+        "format": "2006-01-02 15:04:05"
+      }
+    },
+    "pack-node": {
+      "id": "pack-node",
+      "type": "Context.Pack",
+      "version": "1.0",
+      "params": {}
+    },
+    "llm-node": {
+      "id": "llm-node",
+      "type": "LLM.Generate",
+      "version": "1.0",
+      "params": {
+        "model": "qwen2.5:7b"
+      }
+    }
+  },
+  "edges": [
+    {
+      "id": "e1",
+      "from": {
+        "node": "time-node",
+        "port": "text"
+      },
+      "to": {
+        "node": "pack-node",
+        "port": "messages"
+      },
+      "type": "data"
+    },
+    {
+      "id": "e2",
+      "from": {
+        "node": "pack-node",
+        "port": "context_pack"
+      },
+      "to": {
+        "node": "llm-node",
+        "port": "context_pack"
+      },
+      "type": "data"
+    }
+  ],
+  "ui": {
+    "nodes": {
+      "time-node": {
+        "x": 100,
+        "y": 100
+      },
+      "pack-node": {
+        "x": 300,
+        "y": 100
+      },
+      "llm-node": {
+        "x": 500,
+        "y": 100
+      }
+    }
+  }
+}

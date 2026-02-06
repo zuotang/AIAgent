@@ -119,6 +119,14 @@ func main() {
 	agentService := api.NewAgentService(memStore)
 	log.Println("Agent service initialized successfully")
 
+	// 初始化工作流服务
+	log.Println("Initializing workflow service...")
+	workflowService, err := api.NewWorkflowService(llmClient, cfg.Storage.Database.Path)
+	if err != nil {
+		log.Fatalf("Failed to initialize workflow service: %v", err)
+	}
+	log.Println("Workflow service initialized successfully")
+
 	// 注册路由
 	log.Println("Registering routes...")
 	// 健康检查
@@ -167,6 +175,17 @@ func main() {
 	e.GET("/api/debug/test", debugService.HandleTestConnections)
 	e.POST("/api/debug/request", debugService.HandleRequestDebug)
 	log.Println("Debug routes registered")
+
+	// 工作流相关路由
+	e.GET("/api/workflow/nodes", workflowService.HandleGetNodes)
+	e.POST("/api/workflow/validate", workflowService.HandleValidateWorkflow)
+	e.POST("/api/workflow/execute", workflowService.HandleExecuteWorkflow)
+	e.POST("/api/workflow/save", workflowService.HandleSaveWorkflow)
+	e.GET("/api/workflow/list", workflowService.HandleListWorkflows)
+	e.GET("/api/workflow/:id", workflowService.HandleGetWorkflow)
+	e.DELETE("/api/workflow/:id", workflowService.HandleDeleteWorkflow)
+	e.GET("/api/workflow/trace/:id", workflowService.HandleGetTrace)
+	log.Println("Workflow routes registered")
 
 	// 启动服务器
 	server := &http.Server{
