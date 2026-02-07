@@ -121,7 +121,7 @@ func main() {
 
 	// 初始化工作流服务
 	log.Println("Initializing workflow service...")
-	workflowService, err := api.NewWorkflowService(llmClient, cfg.Storage.Database.Path)
+	workflowService, err := api.NewWorkflowService(llmClient, ollamaClient, memStore, vectorStore, cfg.Storage.Database.Path)
 	if err != nil {
 		log.Fatalf("Failed to initialize workflow service: %v", err)
 	}
@@ -180,6 +180,7 @@ func main() {
 	e.GET("/api/workflow/nodes", workflowService.HandleGetNodes)
 	e.POST("/api/workflow/validate", workflowService.HandleValidateWorkflow)
 	e.POST("/api/workflow/execute", workflowService.HandleExecuteWorkflow)
+	e.POST("/api/workflow/execute/stream", workflowService.HandleExecuteWorkflowStream)
 	e.POST("/api/workflow/save", workflowService.HandleSaveWorkflow)
 	e.GET("/api/workflow/list", workflowService.HandleListWorkflows)
 	e.GET("/api/workflow/:id", workflowService.HandleGetWorkflow)

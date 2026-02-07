@@ -2,10 +2,14 @@ package nodes
 
 import (
 	"agent-langchain/internal/workflow/nodes/context"
+	"agent-langchain/internal/workflow/nodes/embedding"
 	"agent-langchain/internal/workflow/nodes/io"
 	"agent-langchain/internal/workflow/nodes/llm"
+	"agent-langchain/internal/workflow/nodes/logic"
+	"agent-langchain/internal/workflow/nodes/memory"
 	"agent-langchain/internal/workflow/nodes/tool"
 	"agent-langchain/internal/workflow/nodes/transform"
+	"agent-langchain/internal/workflow/nodes/vector"
 	"agent-langchain/internal/workflow/registry"
 )
 
@@ -48,6 +52,15 @@ func RegisterBuiltinNodes(reg *registry.Registry) error {
 	if err := reg.Register((&tool.CalcNode{}).Spec()); err != nil {
 		return err
 	}
+	if err := reg.Register((&tool.DecisionNode{}).Spec()); err != nil {
+		return err
+	}
+	if err := reg.Register((&tool.ExecuteNode{}).Spec()); err != nil {
+		return err
+	}
+	if err := reg.Register((&tool.SufficientNode{}).Spec()); err != nil {
+		return err
+	}
 
 	// IO 节点
 	if err := reg.Register((&io.InputTextNode{}).Spec()); err != nil {
@@ -77,15 +90,52 @@ func RegisterBuiltinNodes(reg *registry.Registry) error {
 		return err
 	}
 
-	// TODO: 注册其他节点
-	// - Memory.Extract
-	// - Memory.Longterm.Get/Put
-	// - Embedding.Encode
-	// - Vector.Query.Build
-	// - Memory.Vector.Query/Upsert
-	// - KB.Query
-	// - Tool.Dispatch
-	// - Tool.Execute
+	// Embedding 节点
+	if err := reg.Register((&embedding.EncodeNode{}).Spec()); err != nil {
+		return err
+	}
+
+	// Vector 节点
+	if err := reg.Register((&vector.QueryNode{}).Spec()); err != nil {
+		return err
+	}
+	if err := reg.Register((&vector.UpsertNode{}).Spec()); err != nil {
+		return err
+	}
+
+	// Memory 节点
+	if err := reg.Register((&memory.QueryNode{}).Spec()); err != nil {
+		return err
+	}
+	if err := reg.Register((&memory.ChatHistoryNode{}).Spec()); err != nil {
+		return err
+	}
+	if err := reg.Register((&memory.ExtractNode{}).Spec()); err != nil {
+		return err
+	}
+	if err := reg.Register((&memory.SaveNode{}).Spec()); err != nil {
+		return err
+	}
+
+	// Logic 节点
+	if err := reg.Register((&logic.SwitchNode{}).Spec()); err != nil {
+		return err
+	}
+	if err := reg.Register((&logic.IfNode{}).Spec()); err != nil {
+		return err
+	}
+	if err := reg.Register((&logic.LoopNode{}).Spec()); err != nil {
+		return err
+	}
+	if err := reg.Register((&logic.FlowIfNode{}).Spec()); err != nil {
+		return err
+	}
+	if err := reg.Register((&logic.FlowSwitchNode{}).Spec()); err != nil {
+		return err
+	}
+	if err := reg.Register((&logic.FlowLoopNode{}).Spec()); err != nil {
+		return err
+	}
 
 	return nil
 }

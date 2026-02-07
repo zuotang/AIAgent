@@ -1,73 +1,120 @@
 {
   "version": "1.0",
   "meta": {
-    "id": "example-wf-001",
-    "name": "Simple LLM Workflow"
+    "id": "wf-tool-loop-001",
+    "name": "Tool Loop Workflow"
   },
   "nodes": {
-    "time-node": {
-      "id": "time-node",
-      "type": "Tool.Time.Now",
+    "input-user": {
+      "id": "input-user",
+      "type": "Input.Text",
+      "version": "1.0",
+      "params": { "text": "" }
+    },
+
+    "decide-tool": {
+      "id": "decide-tool",
+      "type": "Tool.Decide",
       "version": "1.0",
       "params": {
-        "format": "2006-01-02 15:04:05"
+        "model": "qwen2.5:7b",
+        "prompt": "判断用户问题是否需要工具。只输出 JSON: {\"need_tool\":true|false,\"tool_name\":\"calculator|time\",\"tool_args\":\"\"}"
       }
     },
-    "pack-node": {
-      "id": "pack-node",
+
+    "need-tool-if": {
+      "id": "need-tool-if",
+      "type": "Flow.If",
+      "version": "1.0",
+      "params": { "operator": "eq", "compare": "yes" }
+    },
+
+    "tool-exec": {
+      "id": "tool-exec",
+      "type": "Tool.Execute",
+      "version": "1.0",
+      "params": {}
+    },
+
+    "tool-sufficient": {
+      "id": "tool-sufficient",
+      "type": "Tool.Sufficient",
+      "version": "1.0",
+      "params": {
+        "model": "qwen2.5:7b",
+        "prompt": "结果是否足以回答用户？只回答 YES 或 NO。",
+        "max_attempts": 3,
+        "key": "tool_loop_1"
+      }
+    },
+
+    "final-system": {
+      "id": "final-system",
+      "type": "Input.Text",
+      "version": "1.0",
+      "params": { "text": "你是助手，请给出最终回答。" }
+    },
+    "final-system-msg": {
+      "id": "final-system-msg",
+      "type": "Transform.TextToMessages",
+      "version": "1.0",
+      "params": { "role": "system" }
+    },
+    "final-user-msg": {
+      "id": "final-user-msg",
+      "type": "Transform.TextToMessages",
+      "version": "1.0",
+      "params": { "role": "user" }
+    },
+    "final-pack": {
+      "id": "final-pack",
       "type": "Context.Pack",
       "version": "1.0",
       "params": {}
     },
-    "llm-node": {
-      "id": "llm-node",
+    "final-llm": {
+      "id": "final-llm",
       "type": "LLM.Generate",
       "version": "1.0",
-      "params": {
-        "model": "qwen2.5:7b"
-      }
+      "params": { "model": "qwen2.5:7b" }
+    },
+    "final-text": {
+      "id": "final-text",
+      "type": "Transform.MessagesToText",
+      "version": "1.0",
+      "params": {}
+    },
+    "output": {
+      "id": "output",
+      "type": "Output.Text",
+      "version": "1.0",
+      "params": {}
     }
   },
+
   "edges": [
-    {
-      "id": "e1",
-      "from": {
-        "node": "time-node",
-        "port": "text"
-      },
-      "to": {
-        "node": "pack-node",
-        "port": "messages"
-      },
-      "type": "data"
-    },
-    {
-      "id": "e2",
-      "from": {
-        "node": "pack-node",
-        "port": "context_pack"
-      },
-      "to": {
-        "node": "llm-node",
-        "port": "context_pack"
-      },
-      "type": "data"
-    }
-  ],
-  "ui": {
-    "nodes": {
-      "time-node": {
-        "x": 100,
-        "y": 100
-      },
-      "pack-node": {
-        "x": 300,
-        "y": 100
-      },
-      "llm-node": {
-        "x": 500,
-        "y": 100
-      }
-    }
-  }
+    { "id": "e1", "from": { "node": "input-user", "port": "text" }, "to": { "node": "decide-tool", "port": "text" }, "type": "data" },
+    { "id": "e2", "from": { "node": "decide-tool", "port": "need_tool" }, "to": { "node": "need-tool-if", "port": "value" }, "type": "data" },
+
+    { "id": "e3", "from": { "node": "need-tool-if", "port": "true" }, "to": { "node": "tool-exec", "port": "in" }, "type": "flow" },
+
+    { "id": "e4", "from": { "node": "decide-tool", "port": "tool_call" }, "to": { "node": "tool-exec", "port": "tool_call" }, "type": "data" },
+
+    { "id": "e5", "from": { "node": "tool-exec", "port": "tool_result" }, "to": { "node": "tool-sufficient", "port": "tool_result" }, "type": "data" },
+    { "id": "e6", "from": { "node": "input-user", "port": "text" }, "to": { "node": "tool-sufficient", "port": "user_text" }, "type": "data" },
+
+    { "id": "e7", "from": { "node": "tool-sufficient", "port": "not_enough" }, "to": { "node": "decide-tool", "port": "in" }, "type": "flow" },
+
+    { "id": "e8", "from": { "node": "tool-sufficient", "port": "enough" }, "to": { "node": "final-pack", "port": "messages" }, "type": "flow" },
+
+    { "id": "e9", "from": { "node": "final-system", "port": "text" }, "to": { "node": "final-system-msg", "port": "text" }, "type": "data" },
+    { "id": "e10", "from": { "node": "input-user", "port": "text" }, "to": { "node": "final-user-msg", "port": "text" }, "type": "data" },
+
+    { "id": "e11", "from": { "node": "final-system-msg", "port": "messages" }, "to": { "node": "final-pack", "port": "system_messages" }, "type": "data" },
+    { "id": "e12", "from": { "node": "final-user-msg", "port": "messages" }, "to": { "node": "final-pack", "port": "user_messages" }, "type": "data" },
+
+    { "id": "e13", "from": { "node": "final-pack", "port": "context_pack" }, "to": { "node": "final-llm", "port": "context_pack" }, "type": "data" },
+    { "id": "e14", "from": { "node": "final-llm", "port": "messages" }, "to": { "node": "final-text", "port": "messages" }, "type": "data" },
+    { "id": "e15", "from": { "node": "final-text", "port": "text" }, "to": { "node": "output", "port": "text" }, "type": "data" }
+  ]
 }

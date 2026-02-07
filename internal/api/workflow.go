@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -9,7 +10,9 @@ import (
 
 	"github.com/labstack/echo/v4"
 
+	"agent-langchain/internal/memory"
 	"agent-langchain/internal/models"
+	"agent-langchain/internal/rag"
 	"agent-langchain/internal/workflow/dsl"
 	"agent-langchain/internal/workflow/engine"
 	"agent-langchain/internal/workflow/nodes"
@@ -19,14 +22,17 @@ import (
 
 // WorkflowService 工作流服务
 type WorkflowService struct {
-	registry  *registry.Registry
-	executor  *engine.Executor
-	llmClient models.LLMClient
-	store     *store.WorkflowStore
+	registry    *registry.Registry
+	executor    *engine.Executor
+	llmClient   models.LLMClient
+	embedClient models.EmbedClient
+	memStore    *memory.Store
+	vectorStore *rag.QdrantStore
+	store       *store.WorkflowStore
 }
 
 // NewWorkflowService 创建工作流服务
-func NewWorkflowService(llmClient models.LLMClient, dbPath string) (*WorkflowService, error) {
+func NewWorkflowService(llmClient models.LLMClient, embedClient models.EmbedClient, memStore *memory.Store, vectorStore *rag.QdrantStore, dbPath string) (*WorkflowService, error) {
 	// 创建注册中心
 	reg := registry.NewRegistry()
 
@@ -45,10 +51,13 @@ func NewWorkflowService(llmClient models.LLMClient, dbPath string) (*WorkflowSer
 	}
 
 	return &WorkflowService{
-		registry:  reg,
-		executor:  executor,
-		llmClient: llmClient,
-		store:     workflowStore,
+		registry:    reg,
+		executor:    executor,
+		llmClient:   llmClient,
+		embedClient: embedClient,
+		memStore:    memStore,
+		vectorStore: vectorStore,
+		store:       workflowStore,
 	}, nil
 }
 
@@ -171,7 +180,10 @@ func (s *WorkflowService) HandleExecuteWorkflow(c echo.Context) error {
 
 	// 创建运行时上下文
 	rc := &registry.RunContext{
-		LLMClient: registry.NewLLMClientAdapter(s.llmClient),
+		LLMClient:    registry.NewLLMClientAdapter(s.llmClient),
+		EmbedClient:  s.embedClient,
+		MemoryStore:  newMemoryStoreAdapter(s.memStore),
+		QdrantClient: newQdrantAdapter(s.vectorStore),
 	}
 
 	// 执行工作流
@@ -203,7 +215,76 @@ func (s *WorkflowService) HandleExecuteWorkflow(c echo.Context) error {
 	})
 }
 
-// Helper functions for node metadata
+// HandleExecuteWorkflowStream 以 SSE 流式执行工作流，实时推送节点执行进度
+func (s *WorkflowService) HandleExecuteWorkflowStream(c echo.Context) error {
+	var req ExecuteRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("Invalid request: %v", err),
+		})
+	}
+
+	// 设置 SSE 响应头
+	c.Response().Header().Set("Content-Type", "text/event-stream")
+	c.Response().Header().Set("Cache-Control", "no-cache")
+	c.Response().Header().Set("Connection", "keep-alive")
+	c.Response().WriteHeader(http.StatusOK)
+
+	// SSE 写入辅助函数
+	writeSSE := func(eventType string, data any) {
+		jsonData, err := json.Marshal(data)
+		if err != nil {
+			return
+		}
+		fmt.Fprintf(c.Response(), "event: %s\ndata: %s\n\n", eventType, jsonData)
+		if flusher, ok := c.Response().Writer.(http.Flusher); ok {
+			flusher.Flush()
+		}
+	}
+
+	// 创建运行时上下文
+	rc := &registry.RunContext{
+		LLMClient:    registry.NewLLMClientAdapter(s.llmClient),
+		EmbedClient:  s.embedClient,
+		MemoryStore:  newMemoryStoreAdapter(s.memStore),
+		QdrantClient: newQdrantAdapter(s.vectorStore),
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request().Context(), 5*time.Minute)
+	defer cancel()
+
+	// 使用带事件回调的执行器
+	trace, err := s.executor.ExecuteWithEvents(ctx, &req.Workflow, rc, func(event engine.NodeEvent) {
+		writeSSE(string(event.Type), event)
+	})
+
+	// 保存执行记录
+	userID := c.Request().Header.Get("X-User-ID")
+	if userID == "" {
+		userID = "default"
+	}
+	if trace != nil {
+		_ = s.store.SaveExecution(req.Workflow.Meta.ID, userID, trace)
+	}
+
+	// 如果执行器没有发送 workflow 结束事件（比如 validation 失败），补发
+	if err != nil && trace == nil {
+		writeSSE(string(engine.WorkflowEventError), map[string]any{
+			"type":   engine.WorkflowEventError,
+			"status": "error",
+			"error":  err.Error(),
+		})
+	}
+
+	// 发送 SSE 结束标记
+	fmt.Fprintf(c.Response(), "event: done\ndata: {}\n\n")
+	if flusher, ok := c.Response().Writer.(http.Flusher); ok {
+		flusher.Flush()
+	}
+
+	return nil
+}
 
 func getCategory(nodeType string) string {
 	switch {
@@ -217,6 +298,14 @@ func getCategory(nodeType string) string {
 		return "IO"
 	case contains(nodeType, "Transform"):
 		return "Transform"
+	case contains(nodeType, "Embedding"):
+		return "Embedding"
+	case contains(nodeType, "Vector"):
+		return "Vector"
+	case contains(nodeType, "Memory"):
+		return "Memory"
+	case contains(nodeType, "Logic"):
+		return "Logic"
 	default:
 		return "Other"
 	}
@@ -234,24 +323,34 @@ func getName(nodeType string) string {
 
 func getDescription(nodeType string) string {
 	descriptions := map[string]string{
-		"LLM.Ollama":                "使用本地Ollama运行的开源模型",
-		"LLM.DeepSeek":              "使用DeepSeek云端API",
-		"LLM.Anthropic":             "使用Anthropic Claude API",
-		"LLM.Chat":                  "统一的LLM接口，支持多种提供商",
-		"LLM.Generate":              "使用LLM生成文本响应",
-		"LLM.JSON":                  "使用LLM生成JSON输出",
-		"Context.Pack":              "将多个输入打包成context_pack",
-		"Context.Compress":          "使用LLM压缩上下文",
-		"Tool.Time.Now":             "获取当前时间",
-		"Tool.Calc":                 "执行数学计算",
-		"Input.Text":                "文本输入节点",
-		"Output.Text":               "文本输出节点",
-		"Input.JSON":                "JSON输入节点",
-		"Output.JSON":               "JSON输出节点",
-		"Transform.TextToMessages":  "将文本转换为消息列表",
-		"Transform.MessagesToText":  "将消息列表转换为文本",
-		"Transform.JSONToText":      "将JSON转换为文本",
-		"Transform.TextToJSON":      "将文本转换为JSON",
+		"LLM.Ollama":               "使用本地Ollama运行的开源模型",
+		"LLM.DeepSeek":             "使用DeepSeek云端API",
+		"LLM.Anthropic":            "使用Anthropic Claude API",
+		"LLM.Chat":                 "统一的LLM接口，支持多种提供商",
+		"LLM.Generate":             "使用LLM生成文本响应",
+		"LLM.JSON":                 "使用LLM生成JSON输出",
+		"Context.Pack":             "将多个消息输入(系统提示词/用户提示词/通用消息)打包成context_pack",
+		"Context.Compress":         "使用LLM压缩上下文",
+		"Tool.Time.Now":            "获取当前时间",
+		"Tool.Calc":                "执行数学计算",
+		"Input.Text":               "文本输入节点",
+		"Output.Text":              "文本输出节点",
+		"Input.JSON":               "JSON输入节点",
+		"Output.JSON":              "JSON输出节点",
+		"Transform.TextToMessages": "将文本转换为消息列表",
+		"Transform.MessagesToText": "将消息列表转换为文本",
+		"Transform.JSONToText":     "将JSON转换为文本",
+		"Transform.TextToJSON":     "将文本转换为JSON",
+		"Embedding.Encode":         "将文本转换为向量嵌入",
+		"Vector.Query":             "向量相似度检索，支持知识库和记忆库",
+		"Vector.Upsert":            "将文本写入向量存储",
+		"Memory.Query":             "查询结构化记忆（SQLite）",
+		"Memory.ChatHistory":       "获取聊天历史消息",
+		"Memory.Extract":           "使用LLM从对话文本中提取结构化记忆",
+		"Memory.Save":              "将提取的记忆写入SQLite和向量存储",
+		"Logic.Switch":             "多条件分支：将输入值与多个选项匹配，路由到对应出口。支持 data 透传端口",
+		"Logic.If":                 "单条件判断：判断输入值是否满足条件，分流到 true/false 出口。支持 data 透传端口",
+		"Logic.Loop":               "循环执行：重复处理 N 次，支持内置 LLM 迭代调用（模板占位符 {{input}} {{output}} {{index}}）",
 	}
 	if desc, ok := descriptions[nodeType]; ok {
 		return desc
@@ -274,9 +373,9 @@ func getParamInfo(nodeType string) []ParamInfo {
 				Name:        "model",
 				Type:        "string",
 				Required:    false,
-				Default:     "qwen2.5:7b",
+				Default:     "qwen3:4b",
 				Description: "模型名称",
-				Options:     []string{"qwen2.5:7b", "llama2", "mistral", "codellama"},
+				//Options:     []string{"qwen3:4b", "llama2", "mistral", "codellama"},
 			},
 			ParamInfo{
 				Name:        "base_url",
@@ -439,6 +538,245 @@ func getParamInfo(nodeType string) []ParamInfo {
 				Options:     []string{"user", "assistant", "system"},
 			},
 		)
+	case "Vector.Query":
+		params = append(params,
+			ParamInfo{
+				Name:        "collection",
+				Type:        "string",
+				Required:    false,
+				Default:     "knowledge",
+				Description: "检索集合",
+				Options:     []string{"knowledge", "memory"},
+			},
+			ParamInfo{
+				Name:        "top_k",
+				Type:        "number",
+				Required:    false,
+				Default:     3,
+				Description: "返回条数",
+				Min:         float64Ptr(1),
+				Max:         float64Ptr(20),
+			},
+			ParamInfo{
+				Name:        "min_score",
+				Type:        "number",
+				Required:    false,
+				Default:     0.3,
+				Description: "最低相似度阈值(0-1)",
+				Min:         float64Ptr(0),
+				Max:         float64Ptr(1),
+			},
+			ParamInfo{
+				Name:        "user_id",
+				Type:        "string",
+				Required:    false,
+				Default:     "default",
+				Description: "用户ID（memory集合需要）",
+			},
+			ParamInfo{
+				Name:        "agent_id",
+				Type:        "number",
+				Required:    false,
+				Default:     1,
+				Description: "Agent ID",
+				Min:         float64Ptr(1),
+			},
+		)
+	case "Vector.Upsert":
+		params = append(params,
+			ParamInfo{
+				Name:        "collection",
+				Type:        "string",
+				Required:    false,
+				Default:     "knowledge",
+				Description: "目标集合",
+				Options:     []string{"knowledge", "memory"},
+			},
+			ParamInfo{
+				Name:        "user_id",
+				Type:        "string",
+				Required:    false,
+				Default:     "default",
+				Description: "用户ID（memory集合需要）",
+			},
+			ParamInfo{
+				Name:        "agent_id",
+				Type:        "number",
+				Required:    false,
+				Default:     1,
+				Description: "Agent ID",
+				Min:         float64Ptr(1),
+			},
+			ParamInfo{
+				Name:        "file_name",
+				Type:        "string",
+				Required:    false,
+				Default:     "",
+				Description: "文件名标记（knowledge集合用）",
+			},
+		)
+	case "Memory.Query":
+		params = append(params,
+			ParamInfo{
+				Name:        "user_id",
+				Type:        "string",
+				Required:    false,
+				Default:     "default",
+				Description: "用户ID",
+			},
+			ParamInfo{
+				Name:        "agent_id",
+				Type:        "number",
+				Required:    false,
+				Default:     1,
+				Description: "Agent ID",
+				Min:         float64Ptr(1),
+			},
+			ParamInfo{
+				Name:        "limit",
+				Type:        "number",
+				Required:    false,
+				Default:     50,
+				Description: "最大记忆条数",
+				Min:         float64Ptr(1),
+				Max:         float64Ptr(200),
+			},
+		)
+	case "Memory.ChatHistory":
+		params = append(params,
+			ParamInfo{
+				Name:        "user_id",
+				Type:        "string",
+				Required:    false,
+				Default:     "default",
+				Description: "用户ID",
+			},
+			ParamInfo{
+				Name:        "agent_id",
+				Type:        "number",
+				Required:    false,
+				Default:     1,
+				Description: "Agent ID",
+				Min:         float64Ptr(1),
+			},
+			ParamInfo{
+				Name:        "limit",
+				Type:        "number",
+				Required:    false,
+				Default:     20,
+				Description: "最大消息条数",
+				Min:         float64Ptr(1),
+				Max:         float64Ptr(100),
+			},
+		)
+	case "Memory.Extract":
+		params = append(params,
+			ParamInfo{
+				Name:        "model",
+				Type:        "string",
+				Required:    false,
+				Description: "提取器使用的LLM模型（留空使用默认模型）",
+			},
+			ParamInfo{
+				Name:        "include_history",
+				Type:        "boolean",
+				Required:    false,
+				Default:     true,
+				Description: "是否将历史上下文传给LLM（有助于理解但可能导致重复提取）",
+			},
+		)
+	case "Memory.Save":
+		params = append(params,
+			ParamInfo{
+				Name:        "user_id",
+				Type:        "string",
+				Required:    false,
+				Default:     "default",
+				Description: "用户ID",
+			},
+			ParamInfo{
+				Name:        "agent_id",
+				Type:        "number",
+				Required:    false,
+				Default:     1,
+				Description: "Agent ID",
+				Min:         float64Ptr(1),
+			},
+			ParamInfo{
+				Name:        "also_vector",
+				Type:        "boolean",
+				Required:    false,
+				Default:     true,
+				Description: "是否同时写入Qdrant向量存储",
+			},
+		)
+	case "Logic.Switch":
+		params = append(params,
+			ParamInfo{
+				Name:        "cases",
+				Type:        "array",
+				Required:    true,
+				Description: "匹配值数组，如 [\"选项A\",\"选项B\",\"选项C\"]，依次对应输出端口 case_0, case_1, case_2",
+			},
+			ParamInfo{
+				Name:        "mode",
+				Type:        "string",
+				Required:    false,
+				Default:     "exact",
+				Description: "匹配模式",
+				Options:     []string{"exact", "contains", "prefix", "suffix", "iexact", "icontains"},
+			},
+		)
+	case "Logic.If":
+		params = append(params,
+			ParamInfo{
+				Name:        "operator",
+				Type:        "string",
+				Required:    false,
+				Default:     "eq",
+				Description: "比较运算符",
+				Options:     []string{"eq", "neq", "contains", "not_contains", "prefix", "suffix", "gt", "lt", "gte", "lte", "empty", "not_empty"},
+			},
+			ParamInfo{
+				Name:        "compare",
+				Type:        "string",
+				Required:    false,
+				Default:     "",
+				Description: "比较目标值（empty/not_empty 运算符不需要）",
+			},
+		)
+	case "Logic.Loop":
+		params = append(params,
+			ParamInfo{
+				Name:        "count",
+				Type:        "number",
+				Required:    false,
+				Default:     1,
+				Description: "循环次数",
+				Min:         float64Ptr(1),
+				Max:         float64Ptr(100),
+			},
+			ParamInfo{
+				Name:        "prompt",
+				Type:        "string",
+				Required:    false,
+				Default:     "",
+				Description: "LLM 提示词模板，支持占位符 {{input}}(原始输入) {{output}}(上轮输出) {{index}}(当前轮次)。留空则为简单模式不调用 LLM",
+			},
+			ParamInfo{
+				Name:        "model",
+				Type:        "string",
+				Required:    false,
+				Description: "LLM 模型名称（留空使用默认模型，仅 prompt 非空时生效）",
+			},
+			ParamInfo{
+				Name:        "separator",
+				Type:        "string",
+				Required:    false,
+				Default:     "\n---\n",
+				Description: "all 输出端口的分隔符",
+			},
+		)
 	}
 
 	return params
@@ -446,7 +784,7 @@ func getParamInfo(nodeType string) []ParamInfo {
 
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && s[:len(substr)] == substr ||
-		   len(s) > len(substr) && findSubstring(s, substr)
+		len(s) > len(substr) && findSubstring(s, substr)
 }
 
 func findSubstring(s, substr string) bool {
@@ -619,3 +957,105 @@ func (s *WorkflowService) HandleGetTrace(c echo.Context) error {
 	return c.JSON(http.StatusOK, trace)
 }
 
+// --- Adapters: 将实际存储类型转换为 registry 接口 ---
+
+// memoryStoreAdapter 将 memory.Store 适配为 registry.RunContext.MemoryStore 接口
+type memoryStoreAdapter struct {
+	store *memory.Store
+}
+
+func newMemoryStoreAdapter(s *memory.Store) *memoryStoreAdapter {
+	if s == nil {
+		return nil
+	}
+	return &memoryStoreAdapter{store: s}
+}
+
+func (a *memoryStoreAdapter) RenderStructuredMemory(ctx context.Context, userID string, agentID uint, limit int) (string, error) {
+	return a.store.RenderStructuredMemory(ctx, userID, agentID, limit)
+}
+
+func (a *memoryStoreAdapter) GetChatHistory(ctx context.Context, userID string, agentID uint, limit, offset int) ([]registry.ChatMessageItem, error) {
+	msgs, err := a.store.GetChatHistory(ctx, userID, agentID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]registry.ChatMessageItem, len(msgs))
+	for i, m := range msgs {
+		items[i] = registry.ChatMessageItem{
+			ID:        m.ID,
+			UserID:    m.UserID,
+			AgentID:   m.AgentID,
+			Role:      m.Role,
+			Content:   m.Content,
+			SessionID: m.SessionID,
+		}
+	}
+	return items, nil
+}
+
+func (a *memoryStoreAdapter) UpsertExtractedMemories(ctx context.Context, userID string, agentID uint, memories []registry.ExtractedMemoryItem) error {
+	// 转换 registry.ExtractedMemoryItem → memory.ExtractedMemory
+	mems := make([]memory.ExtractedMemory, len(memories))
+	for i, m := range memories {
+		mems[i] = memory.ExtractedMemory{
+			Type:       m.Type,
+			Key:        m.Key,
+			Value:      m.Value,
+			Confidence: m.Confidence,
+			AlsoVector: m.AlsoVector,
+			Text:       m.Text,
+			Owner:      m.Owner,
+			Layer:      m.Layer,
+			Importance: m.Importance,
+		}
+	}
+	return a.store.UpsertExtractedMemories(ctx, userID, agentID, mems)
+}
+
+// qdrantAdapter 将 rag.QdrantStore 适配为 registry.RunContext.QdrantClient 接口
+type qdrantAdapter struct {
+	store *rag.QdrantStore
+}
+
+func newQdrantAdapter(s *rag.QdrantStore) *qdrantAdapter {
+	if s == nil {
+		return nil
+	}
+	return &qdrantAdapter{store: s}
+}
+
+func (a *qdrantAdapter) SimilaritySearchKnowledge(ctx context.Context, agentID uint, query string, topK int) ([]registry.VectorDoc, error) {
+	docs, err := a.store.SimilaritySearchKnowledge(ctx, agentID, query, topK)
+	if err != nil {
+		return nil, err
+	}
+	return convertDocs(docs), nil
+}
+
+func (a *qdrantAdapter) SimilaritySearchMemory(ctx context.Context, userID string, agentID uint, query string, topK int) ([]registry.VectorDoc, error) {
+	docs, err := a.store.SimilaritySearchMemory(ctx, userID, agentID, query, topK)
+	if err != nil {
+		return nil, err
+	}
+	return convertDocs(docs), nil
+}
+
+func (a *qdrantAdapter) UpsertKnowledgeTexts(ctx context.Context, agentID uint, texts []string, fileName string) error {
+	return a.store.UpsertKnowledgeTexts(ctx, agentID, texts, fileName)
+}
+
+func (a *qdrantAdapter) UpsertMemoryTexts(ctx context.Context, userID string, agentID uint, texts []string) error {
+	return a.store.UpsertMemoryTexts(ctx, userID, agentID, texts)
+}
+
+func convertDocs(docs []rag.Doc) []registry.VectorDoc {
+	result := make([]registry.VectorDoc, len(docs))
+	for i, d := range docs {
+		result[i] = registry.VectorDoc{
+			PageContent: d.PageContent,
+			Score:       d.Score,
+		}
+	}
+	return result
+}

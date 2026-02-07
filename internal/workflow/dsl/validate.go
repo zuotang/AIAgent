@@ -121,7 +121,9 @@ func validateTopology(wf *Workflow) error {
 		graph[nodeID] = []string{}
 	}
 	for _, edge := range wf.Edges {
-		graph[edge.From.Node] = append(graph[edge.From.Node], edge.To.Node)
+		if edge.Type != EdgeTypeFlow {
+			graph[edge.From.Node] = append(graph[edge.From.Node], edge.To.Node)
+		}
 	}
 
 	// DFS 检测循环

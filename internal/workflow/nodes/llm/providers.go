@@ -15,36 +15,29 @@ import (
 type OllamaNode struct{}
 
 func (n *OllamaNode) Run(ctx context.Context, rc *registry.RunContext, inputs map[string]any, params map[string]any) (map[string]any, error) {
-	// 获取参数
 	baseURL, _ := params["base_url"].(string)
 	if baseURL == "" {
 		baseURL = "http://localhost:11434"
 	}
-
 	model, _ := params["model"].(string)
 	if model == "" {
 		model = "qwen2.5:7b"
 	}
-
 	temperature, _ := params["temperature"].(float64)
 	maxRetries := getIntParam(params, "max_retries", 1)
 
-	// 获取 messages
 	messages, err := extractMessages(inputs)
 	if err != nil {
 		return nil, err
 	}
 
-	// 创建客户端
 	client := models.New(baseURL, model, "")
 	if temperature > 0 {
 		client.Temperature = temperature
 	}
 
-	// 转换消息
 	chatMsgs := convertToModelMessages(messages)
 
-	// 调用 LLM（支持重试）
 	response, err := callLLMWithRetry(ctx, client, chatMsgs, model, maxRetries)
 	if err != nil {
 		return nil, err
@@ -74,37 +67,28 @@ func (n *OllamaNode) Spec() *registry.NodeSpec {
 type DeepSeekNode struct{}
 
 func (n *DeepSeekNode) Run(ctx context.Context, rc *registry.RunContext, inputs map[string]any, params map[string]any) (map[string]any, error) {
-	// 获取参数
 	baseURL, _ := params["base_url"].(string)
 	if baseURL == "" {
 		baseURL = "https://api.deepseek.com/v1"
 	}
-
 	model, _ := params["model"].(string)
 	if model == "" {
 		model = "deepseek-chat"
 	}
-
 	apiKey, _ := params["api_key"].(string)
 	if apiKey == "" {
 		return nil, fmt.Errorf("api_key is required for DeepSeek")
 	}
-
 	maxRetries := getIntParam(params, "max_retries", 1)
 
-	// 获取 messages
 	messages, err := extractMessages(inputs)
 	if err != nil {
 		return nil, err
 	}
 
-	// 创建客户端
 	client := models.NewDeepSeek(baseURL, apiKey, model)
-
-	// 转换消息
 	chatMsgs := convertToModelMessages(messages)
 
-	// 调用 LLM
 	response, err := callLLMWithRetry(ctx, client, chatMsgs, model, maxRetries)
 	if err != nil {
 		return nil, err
@@ -134,38 +118,28 @@ func (n *DeepSeekNode) Spec() *registry.NodeSpec {
 type AnthropicNode struct{}
 
 func (n *AnthropicNode) Run(ctx context.Context, rc *registry.RunContext, inputs map[string]any, params map[string]any) (map[string]any, error) {
-	// 获取参数
 	baseURL, _ := params["base_url"].(string)
 	if baseURL == "" {
 		baseURL = "https://api.anthropic.com/v1"
 	}
-
 	model, _ := params["model"].(string)
 	if model == "" {
 		model = "claude-3-sonnet-20240229"
 	}
-
 	apiKey, _ := params["api_key"].(string)
 	if apiKey == "" {
 		return nil, fmt.Errorf("api_key is required for Anthropic")
 	}
-
 	maxRetries := getIntParam(params, "max_retries", 1)
 
-	// 获取 messages
 	messages, err := extractMessages(inputs)
 	if err != nil {
 		return nil, err
 	}
 
-	// 创建客户端
 	client := models.NewAnthropic(baseURL, model, "")
-	// TODO: 设置 API Key
-
-	// 转换消息
 	chatMsgs := convertToModelMessages(messages)
 
-	// 调用 LLM
 	response, err := callLLMWithRetry(ctx, client, chatMsgs, model, maxRetries)
 	if err != nil {
 		return nil, err
@@ -255,13 +229,11 @@ func callLLMWithRetry(ctx context.Context, client models.LLMClient, msgs []model
 			return response, nil
 		}
 
-		// 如果不是最后一次重试，等待后重试
 		if i < maxRetries-1 {
 			select {
 			case <-ctx.Done():
 				return "", ctx.Err()
 			case <-time.After(time.Second * time.Duration(i+1)):
-				// 指数退避
 			}
 		}
 	}
@@ -278,7 +250,6 @@ func getIntParam(params map[string]any, key string, defaultValue int) int {
 		case float64:
 			return int(v)
 		case string:
-			// 尝试解析字符串
 			var i int
 			fmt.Sscanf(v, "%d", &i)
 			return i

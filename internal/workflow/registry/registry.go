@@ -40,16 +40,19 @@ type RunContext struct {
 		Embed(ctx context.Context, text string) ([]float32, error)
 	}
 
-	// Memory 存储
+	// Memory 存储（SQLite）
 	MemoryStore interface {
-		// 这里定义 Memory 接口方法
-		// TODO: 根据实际 memory.Store 接口定义
+		RenderStructuredMemory(ctx context.Context, userID string, agentID uint, limit int) (string, error)
+		GetChatHistory(ctx context.Context, userID string, agentID uint, limit, offset int) ([]ChatMessageItem, error)
+		UpsertExtractedMemories(ctx context.Context, userID string, agentID uint, memories []ExtractedMemoryItem) error
 	}
 
-	// Qdrant 客户端
+	// Qdrant 向量存储
 	QdrantClient interface {
-		// 这里定义 Qdrant 接口方法
-		// TODO: 根据实际 qdrant.Store 接口定义
+		SimilaritySearchKnowledge(ctx context.Context, agentID uint, query string, topK int) ([]VectorDoc, error)
+		SimilaritySearchMemory(ctx context.Context, userID string, agentID uint, query string, topK int) ([]VectorDoc, error)
+		UpsertKnowledgeTexts(ctx context.Context, agentID uint, texts []string, fileName string) error
+		UpsertMemoryTexts(ctx context.Context, userID string, agentID uint, texts []string) error
 	}
 
 	// Tool 注册表
@@ -60,6 +63,35 @@ type RunContext struct {
 
 	// 缓存（可选）
 	Cache map[string]any
+}
+
+// ChatMessageItem 聊天消息（轻量结构体，避免循环依赖）
+type ChatMessageItem struct {
+	ID        uint   `json:"id"`
+	UserID    string `json:"user_id"`
+	AgentID   uint   `json:"agent_id"`
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	SessionID string `json:"session_id"`
+}
+
+// VectorDoc 向量检索文档（轻量结构体，避免循环依赖）
+type VectorDoc struct {
+	PageContent string  `json:"page_content"`
+	Score       float64 `json:"score"`
+}
+
+// ExtractedMemoryItem 提取的记忆条目（轻量结构体，避免循环依赖）
+type ExtractedMemoryItem struct {
+	Type       string  `json:"type"`
+	Key        string  `json:"key"`
+	Value      string  `json:"value"`
+	Confidence float64 `json:"confidence"`
+	AlsoVector bool    `json:"also_vector"`
+	Text       string  `json:"text"`
+	Owner      string  `json:"owner"`
+	Layer      int     `json:"layer"`
+	Importance float64 `json:"importance"`
 }
 
 // Registry 节点注册中心

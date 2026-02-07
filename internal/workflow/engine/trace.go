@@ -113,3 +113,28 @@ func (rt *RunTrace) Cancel() {
 	rt.Duration = now.Sub(rt.StartTime)
 	rt.Status = "cancelled"
 }
+
+// NodeEventType 节点事件类型
+type NodeEventType string
+
+const (
+	NodeEventStart    NodeEventType = "node_start"    // 节点开始执行
+	NodeEventComplete NodeEventType = "node_complete" // 节点执行完成
+	NodeEventError    NodeEventType = "node_error"    // 节点执行失败
+	NodeEventSkip     NodeEventType = "node_skip"     // 节点跳过
+
+	WorkflowEventComplete NodeEventType = "workflow_complete" // 工作流完成
+	WorkflowEventError    NodeEventType = "workflow_error"    // 工作流失败
+)
+
+// NodeEvent 节点执行事件（用于实时推送）
+type NodeEvent struct {
+	Type     NodeEventType  `json:"type"`               // 事件类型
+	NodeID   string         `json:"node_id,omitempty"`   // 节点 ID
+	NodeType string         `json:"node_type,omitempty"` // 节点类型（如 "LLM.Chat"）
+	Status   string         `json:"status"`              // 状态
+	Error    string         `json:"error,omitempty"`     // 错误信息
+	Duration float64        `json:"duration,omitempty"`  // 耗时（秒）
+	Outputs  map[string]any `json:"outputs,omitempty"`   // 输出数据（仅 complete 时）
+	Trace    *RunTrace      `json:"trace,omitempty"`     // 完整 trace（仅 workflow 结束时）
+}

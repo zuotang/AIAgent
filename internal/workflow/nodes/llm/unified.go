@@ -18,10 +18,9 @@ type UnifiedLLMNode struct{}
 
 // Run 执行节点
 func (n *UnifiedLLMNode) Run(ctx context.Context, rc *registry.RunContext, inputs map[string]any, params map[string]any) (map[string]any, error) {
-	// 1. 获取参数
 	provider, _ := params["provider"].(string)
 	if provider == "" {
-		provider = "ollama" // 默认使用 Ollama
+		provider = "ollama"
 	}
 
 	model, _ := params["model"].(string)
@@ -30,7 +29,6 @@ func (n *UnifiedLLMNode) Run(ctx context.Context, rc *registry.RunContext, input
 	baseURL, _ := params["base_url"].(string)
 	apiKey, _ := params["api_key"].(string)
 
-	// 2. 从输入获取 messages
 	var messages []any
 	if contextPack, ok := inputs["context_pack"]; ok {
 		if pack, ok := contextPack.(map[string]any); ok {
@@ -46,7 +44,6 @@ func (n *UnifiedLLMNode) Run(ctx context.Context, rc *registry.RunContext, input
 		return nil, fmt.Errorf("messages input is required")
 	}
 
-	// 3. 根据提供商创建客户端
 	var llmClient models.LLMClient
 
 	switch provider {
@@ -91,35 +88,15 @@ func (n *UnifiedLLMNode) Run(ctx context.Context, rc *registry.RunContext, input
 		return nil, fmt.Errorf("unsupported provider: %s", provider)
 	}
 
-	// 4. 转换消息格式
-	chatMsgs := make([]models.ChatMessage, 0, len(messages))
-	for _, msg := range messages {
-		switch m := msg.(type) {
-		case models.ChatMessage:
-			chatMsgs = append(chatMsgs, m)
-		case map[string]any:
-			role, _ := m["role"].(string)
-			content, _ := m["content"].(string)
-			chatMsgs = append(chatMsgs, models.ChatMessage{
-				Role:    role,
-				Content: content,
-			})
-		case string:
-			chatMsgs = append(chatMsgs, models.ChatMessage{
-				Role:    "user",
-				Content: m,
-			})
-		}
-	}
-
-	// 5. 调用 LLM（支持重试）
-	var response string
-	var err error
+	chatMsgs := convertToModelMessages(messages)
 
 	retries := int(maxRetries)
 	if retries <= 0 {
 		retries = 1
 	}
+
+	var response string
+	var err error
 
 	for i := 0; i < retries; i++ {
 		response, err = llmClient.Chat(ctx, chatMsgs, model)
@@ -127,7 +104,6 @@ func (n *UnifiedLLMNode) Run(ctx context.Context, rc *registry.RunContext, input
 			break
 		}
 		if i < retries-1 {
-			// 等待后重试
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
@@ -140,7 +116,6 @@ func (n *UnifiedLLMNode) Run(ctx context.Context, rc *registry.RunContext, input
 		return nil, fmt.Errorf("LLM chat failed after %d retries: %w", retries, err)
 	}
 
-	// 6. 返回输出
 	return map[string]any{
 		"messages": response,
 	}, nil

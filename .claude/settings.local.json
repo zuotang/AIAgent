@@ -24,7 +24,8 @@
       "Bash(findstr:*)",
       "Bash(git checkout:*)",
       "Bash(tree:*)",
-      "Bash(go mod init:*)"
+      "Bash(go mod init:*)",
+      "Bash(go vet:*)"
     ]
   }
 }
