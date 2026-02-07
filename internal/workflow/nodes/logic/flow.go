@@ -178,3 +178,23 @@ func (n *FlowLoopNode) Spec() *registry.NodeSpec {
 		Runner: n,
 	}
 }
+
+// FlowStartNode Flow.Start 节点 — 流程起点
+// 无输入，输出 flow 信号
+type FlowStartNode struct{}
+
+func (n *FlowStartNode) Run(ctx context.Context, rc *registry.RunContext, inputs map[string]any, params map[string]any) (map[string]any, error) {
+	return map[string]any{"out": true}, nil
+}
+
+func (n *FlowStartNode) Spec() *registry.NodeSpec {
+	return &registry.NodeSpec{
+		Type:    "Flow.Start",
+		Version: "1.0",
+		Inputs:  []types.PortSpec{},
+		Outputs: []types.PortSpec{
+			{Name: "out", Type: types.PortTypeFlow, Required: true},
+		},
+		Runner: n,
+	}
+}

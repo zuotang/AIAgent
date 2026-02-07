@@ -191,7 +191,7 @@ func (c *Config) setDefaults() {
 
 	// LLM 配置默认值
 	if c.LLM.Ollama.BaseURL == "" {
-		c.LLM.Ollama.BaseURL = "http://127.0.0.1:11434"
+		c.LLM.Ollama.BaseURL = "http://localhost:11434"
 	}
 	if c.LLM.Ollama.ChatModel == "" {
 		c.LLM.Ollama.ChatModel = "gemma3:12b"

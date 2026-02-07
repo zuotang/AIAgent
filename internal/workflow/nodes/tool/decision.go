@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"agent-langchain/internal/models"
 	"agent-langchain/internal/workflow/registry"
 	"agent-langchain/internal/workflow/types"
 )
@@ -25,16 +26,17 @@ type toolDecision struct {
 }
 
 func (n *DecisionNode) Run(ctx context.Context, rc *registry.RunContext, inputs map[string]any, params map[string]any) (map[string]any, error) {
-	if rc.LLMClient == nil {
-		return nil, fmt.Errorf("LLMClient is required")
-	}
-
 	text, _ := inputs["text"].(string)
 	if strings.TrimSpace(text) == "" {
 		return nil, fmt.Errorf("text input is required")
 	}
 
 	model, _ := params["model"].(string)
+	provider, _ := params["provider"].(string)
+	baseURL, _ := params["base_url"].(string)
+	apiKey, _ := params["api_key"].(string)
+	temperature, _ := params["temperature"].(float64)
+	maxRetries := getIntParam(params, "max_retries", 1)
 	prompt, _ := params["prompt"].(string)
 	toolsList, _ := params["tools"]
 
@@ -52,13 +54,9 @@ func (n *DecisionNode) Run(ctx context.Context, rc *registry.RunContext, inputs 
 		}
 	}
 
-	messages := []any{
-		map[string]any{"role": "user", "content": prompt + "\n\nUser: " + text},
-	}
-
-	resp, err := rc.LLMClient.Chat(ctx, messages, model)
+	resp, err := callLLM(ctx, rc, provider, baseURL, apiKey, model, temperature, maxRetries, prompt+"\n\nUser: "+text)
 	if err != nil {
-		return nil, fmt.Errorf("LLM chat failed: %w", err)
+		return nil, err
 	}
 
 	var decision toolDecision
@@ -90,6 +88,7 @@ func (n *DecisionNode) Spec() *registry.NodeSpec {
 		Type:    "Tool.Decide",
 		Version: "1.0",
 		Inputs: []types.PortSpec{
+			{Name: "in", Type: types.PortTypeFlow, Required: false},
 			{Name: "text", Type: types.PortTypeText, Required: true},
 		},
 		Outputs: []types.PortSpec{
@@ -150,11 +149,44 @@ func (n *ExecuteNode) Spec() *registry.NodeSpec {
 		Type:    "Tool.Execute",
 		Version: "1.0",
 		Inputs: []types.PortSpec{
+			{Name: "in", Type: types.PortTypeFlow, Required: false},
 			{Name: "tool_call", Type: types.PortTypeToolCall, Required: true},
 		},
 		Outputs: []types.PortSpec{
 			{Name: "tool_result", Type: types.PortTypeToolResult, Required: true},
 			{Name: "text", Type: types.PortTypeText, Required: true},
+		},
+		Runner: n,
+	}
+}
+
+// ValidateNode Tool.Validate 节点
+// 输入: tool_result
+// 输出: valid(flow), tool_result
+type ValidateNode struct{}
+
+func (n *ValidateNode) Run(ctx context.Context, rc *registry.RunContext, inputs map[string]any, params map[string]any) (map[string]any, error) {
+	result, _ := inputs["tool_result"].(string)
+	if strings.TrimSpace(result) == "" {
+		return map[string]any{"tool_result": result}, nil
+	}
+	return map[string]any{
+		"valid":       true,
+		"tool_result": result,
+	}, nil
+}
+
+func (n *ValidateNode) Spec() *registry.NodeSpec {
+	return &registry.NodeSpec{
+		Type:    "Tool.Validate",
+		Version: "1.0",
+		Inputs: []types.PortSpec{
+			{Name: "in", Type: types.PortTypeFlow, Required: false},
+			{Name: "tool_result", Type: types.PortTypeToolResult, Required: true},
+		},
+		Outputs: []types.PortSpec{
+			{Name: "valid", Type: types.PortTypeFlow, Required: false},
+			{Name: "tool_result", Type: types.PortTypeToolResult, Required: false},
 		},
 		Runner: n,
 	}
@@ -166,10 +198,6 @@ func (n *ExecuteNode) Spec() *registry.NodeSpec {
 type SufficientNode struct{}
 
 func (n *SufficientNode) Run(ctx context.Context, rc *registry.RunContext, inputs map[string]any, params map[string]any) (map[string]any, error) {
-	if rc.LLMClient == nil {
-		return nil, fmt.Errorf("LLMClient is required")
-	}
-
 	toolResult, _ := inputs["tool_result"].(string)
 	userText, _ := inputs["user_text"].(string)
 	if strings.TrimSpace(toolResult) == "" {
@@ -216,18 +244,18 @@ func (n *SufficientNode) Run(ctx context.Context, rc *registry.RunContext, input
 	}
 
 	model, _ := params["model"].(string)
+	provider, _ := params["provider"].(string)
+	baseURL, _ := params["base_url"].(string)
+	apiKey, _ := params["api_key"].(string)
+	temperature, _ := params["temperature"].(float64)
+	maxRetries := getIntParam(params, "max_retries", 1)
 	prompt, _ := params["prompt"].(string)
 	if prompt == "" {
 		prompt = "Given the user question and tool result, is the result sufficient to answer? Reply YES or NO only."
 	}
-
-	messages := []any{
-		map[string]any{"role": "user", "content": fmt.Sprintf("%s\n\nUser: %s\nToolResult: %s", prompt, userText, toolResult)},
-	}
-
-	resp, err := rc.LLMClient.Chat(ctx, messages, model)
+	resp, err := callLLM(ctx, rc, provider, baseURL, apiKey, model, temperature, maxRetries, fmt.Sprintf("%s\n\nUser: %s\nToolResult: %s", prompt, userText, toolResult))
 	if err != nil {
-		return nil, fmt.Errorf("LLM chat failed: %w", err)
+		return nil, err
 	}
 
 	resp = strings.TrimSpace(strings.ToUpper(resp))
@@ -248,6 +276,7 @@ func (n *SufficientNode) Spec() *registry.NodeSpec {
 		Type:    "Tool.Sufficient",
 		Version: "1.0",
 		Inputs: []types.PortSpec{
+			{Name: "in", Type: types.PortTypeFlow, Required: false},
 			{Name: "user_text", Type: types.PortTypeText, Required: false},
 			{Name: "tool_result", Type: types.PortTypeToolResult, Required: true},
 		},
@@ -283,6 +312,129 @@ func parseToolCall(raw any) (string, string, error) {
 	default:
 		return "", "", fmt.Errorf("unsupported tool_call type: %T", raw)
 	}
+}
+
+func callLLM(
+	ctx context.Context,
+	rc *registry.RunContext,
+	provider string,
+	baseURL string,
+	apiKey string,
+	model string,
+	temperature float64,
+	maxRetries int,
+	content string,
+) (string, error) {
+	if provider == "" {
+		if rc.LLMClient == nil {
+			return "", fmt.Errorf("LLMClient is required")
+		}
+		messages := []any{
+			map[string]any{"role": "user", "content": content},
+		}
+		resp, err := rc.LLMClient.Chat(ctx, messages, model)
+		if err != nil {
+			return "", fmt.Errorf("LLM chat failed: %w", err)
+		}
+		return resp, nil
+	}
+
+	client, err := buildLLMClient(provider, baseURL, apiKey, model, temperature)
+	if err != nil {
+		return "", err
+	}
+
+	msgs := []models.ChatMessage{
+		{Role: "user", Content: content},
+	}
+
+	resp, err := callLLMWithRetry(ctx, client, msgs, model, maxRetries)
+	if err != nil {
+		return "", err
+	}
+	return resp, nil
+}
+
+func buildLLMClient(provider, baseURL, apiKey, model string, temperature float64) (models.LLMClient, error) {
+	switch strings.ToLower(provider) {
+	case "ollama":
+		if baseURL == "" {
+			baseURL = "http://localhost:11434"
+		}
+		if model == "" {
+			model = "Gemma3UThink:4b"
+		}
+		client := models.New(baseURL, model, "")
+		if temperature > 0 {
+			client.Temperature = temperature
+		}
+		return client, nil
+	case "deepseek":
+		if baseURL == "" {
+			baseURL = "https://api.deepseek.com/v1"
+		}
+		if model == "" {
+			model = "deepseek-chat"
+		}
+		if apiKey == "" {
+			return nil, fmt.Errorf("api_key is required for DeepSeek")
+		}
+		return models.NewDeepSeek(baseURL, apiKey, model), nil
+	case "anthropic":
+		if baseURL == "" {
+			baseURL = "https://api.anthropic.com/v1"
+		}
+		if model == "" {
+			model = "claude-3-sonnet-20240229"
+		}
+		if apiKey == "" {
+			return nil, fmt.Errorf("api_key is required for Anthropic")
+		}
+		return models.NewAnthropic(baseURL, model, ""), nil
+	default:
+		return nil, fmt.Errorf("unsupported provider: %s", provider)
+	}
+}
+
+func callLLMWithRetry(ctx context.Context, client models.LLMClient, msgs []models.ChatMessage, model string, maxRetries int) (string, error) {
+	if maxRetries <= 0 {
+		maxRetries = 1
+	}
+
+	var response string
+	var err error
+
+	for i := 0; i < maxRetries; i++ {
+		response, err = client.Chat(ctx, msgs, model)
+		if err == nil {
+			return response, nil
+		}
+		if i < maxRetries-1 {
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(time.Second * time.Duration(i+1)):
+			}
+		}
+	}
+
+	return "", fmt.Errorf("LLM call failed after %d retries: %w", maxRetries, err)
+}
+
+func getIntParam(params map[string]any, key string, defaultValue int) int {
+	if val, ok := params[key]; ok {
+		switch v := val.(type) {
+		case int:
+			return v
+		case float64:
+			return int(v)
+		case string:
+			var i int
+			fmt.Sscanf(v, "%d", &i)
+			return i
+		}
+	}
+	return defaultValue
 }
 
 func evaluateExpression(expr string) (float64, error) {

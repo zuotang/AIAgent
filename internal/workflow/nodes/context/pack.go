@@ -74,6 +74,7 @@ func (n *PackNode) Spec() *registry.NodeSpec {
 		Type:    "Context.Pack",
 		Version: "1.0",
 		Inputs: []types.PortSpec{
+			{Name: "in", Type: types.PortTypeFlow, Required: false},
 			{Name: "system_messages", Type: types.PortTypeMessages, Required: false},
 			{Name: "user_messages", Type: types.PortTypeMessages, Required: false},
 			{Name: "messages", Type: types.PortTypeMessages, Required: false},

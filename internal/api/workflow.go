@@ -184,7 +184,9 @@ func (s *WorkflowService) HandleExecuteWorkflow(c echo.Context) error {
 		EmbedClient:  s.embedClient,
 		MemoryStore:  newMemoryStoreAdapter(s.memStore),
 		QdrantClient: newQdrantAdapter(s.vectorStore),
+		Cache:        make(map[string]any),
 	}
+	rc.Cache["executor"] = s.executor
 
 	// 执行工作流
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -249,7 +251,9 @@ func (s *WorkflowService) HandleExecuteWorkflowStream(c echo.Context) error {
 		EmbedClient:  s.embedClient,
 		MemoryStore:  newMemoryStoreAdapter(s.memStore),
 		QdrantClient: newQdrantAdapter(s.vectorStore),
+		Cache:        make(map[string]any),
 	}
+	rc.Cache["executor"] = s.executor
 
 	ctx, cancel := context.WithTimeout(c.Request().Context(), 5*time.Minute)
 	defer cancel()
@@ -294,6 +298,10 @@ func getCategory(nodeType string) string {
 		return "Context"
 	case contains(nodeType, "Tool"):
 		return "Tool"
+	case contains(nodeType, "Session"):
+		return "Session"
+	case contains(nodeType, "Preprocess"):
+		return "Preprocess"
 	case contains(nodeType, "Input") || contains(nodeType, "Output"):
 		return "IO"
 	case contains(nodeType, "Transform"):
@@ -304,8 +312,12 @@ func getCategory(nodeType string) string {
 		return "Vector"
 	case contains(nodeType, "Memory"):
 		return "Memory"
+	case contains(nodeType, "KB"):
+		return "KB"
 	case contains(nodeType, "Logic"):
 		return "Logic"
+	case contains(nodeType, "Workflow"):
+		return "Workflow"
 	default:
 		return "Other"
 	}
@@ -331,8 +343,17 @@ func getDescription(nodeType string) string {
 		"LLM.JSON":                 "使用LLM生成JSON输出",
 		"Context.Pack":             "将多个消息输入(系统提示词/用户提示词/通用消息)打包成context_pack",
 		"Context.Compress":         "使用LLM压缩上下文",
+		"Context.Assemble":         "组装系统/用户/证据/记忆上下文为 context_pack",
+		"Context.WindowCheck":      "检测上下文是否超窗",
+		"Context.Summary":          "对话摘要（占位节点）",
+		"Context.KeepRecent":       "保留最近高价值片段（占位节点）",
+		"Context.KeepCitations":    "保留引用片段（占位节点）",
 		"Tool.Time.Now":            "获取当前时间",
 		"Tool.Calc":                "执行数学计算",
+		"Tool.Decide":              "使用LLM判断是否需要工具并生成工具调用参数",
+		"Tool.Execute":             "执行工具调用（calculator/time）",
+		"Tool.Sufficient":          "使用LLM判断工具结果是否足够",
+		"Tool.Validate":            "工具结果校验（占位节点）",
 		"Input.Text":               "文本输入节点",
 		"Output.Text":              "文本输出节点",
 		"Input.JSON":               "JSON输入节点",
@@ -344,13 +365,31 @@ func getDescription(nodeType string) string {
 		"Embedding.Encode":         "将文本转换为向量嵌入",
 		"Vector.Query":             "向量相似度检索，支持知识库和记忆库",
 		"Vector.Upsert":            "将文本写入向量存储",
+		"KB.QueryRewrite":          "生成检索用的 Query Rewrite",
+		"KB.Search":                "知识库检索（向量检索）",
+		"KB.RerankDedup":           "检索结果重排与去重",
+		"KB.EvidencePack":          "证据打包为上下文片段",
+		"Context.InjectEvidence":   "将证据注入为系统消息",
 		"Memory.Query":             "查询结构化记忆（SQLite）",
 		"Memory.ChatHistory":       "获取聊天历史消息",
 		"Memory.Extract":           "使用LLM从对话文本中提取结构化记忆",
 		"Memory.Save":              "将提取的记忆写入SQLite和向量存储",
+		"Memory.Read":              "读取长期记忆（结构化渲染）",
+		"Memory.Candidate":         "候选记忆生成（占位节点）",
+		"Memory.Gate":              "记忆门控（占位节点）",
+		"Memory.Write":             "写入长期记忆存储",
+		"Context.InjectMemory":     "将记忆注入为系统消息",
+		"Session.Entry":            "会话入口：记录元数据",
+		"Preprocess.Basic":         "预处理：分词/语言检测/意图识别（占位）",
+		"Workflow.Call":            "调用子工作流（组合节点）",
 		"Logic.Switch":             "多条件分支：将输入值与多个选项匹配，路由到对应出口。支持 data 透传端口",
 		"Logic.If":                 "单条件判断：判断输入值是否满足条件，分流到 true/false 出口。支持 data 透传端口",
 		"Logic.Loop":               "循环执行：重复处理 N 次，支持内置 LLM 迭代调用（模板占位符 {{input}} {{output}} {{index}}）",
+		"Flow.If":                  "控制流条件判断：根据输入值输出 true/false 的 flow 信号",
+		"Flow.Switch":              "控制流多分支：根据输入值输出对应 case 的 flow 信号",
+		"Flow.Loop":                "控制流循环：按计数器输出 continue/done 的 flow 信号",
+		"Flow.Start":               "流程起点：输出一次 flow 信号",
+		"Flow.Debug":               "调试 flow 信号：触发时输出调试文本",
 	}
 	if desc, ok := descriptions[nodeType]; ok {
 		return desc
@@ -499,6 +538,44 @@ func getParamInfo(nodeType string) []ParamInfo {
 				Description: "温度参数",
 			},
 		)
+	case "LLM.Generate":
+		params = append(params,
+			ParamInfo{
+				Name:        "provider",
+				Type:        "string",
+				Required:    false,
+				Default:     "ollama",
+				Description: "提供商",
+				Options:     []string{"ollama", "deepseek", "anthropic"},
+			},
+			ParamInfo{
+				Name:        "base_url",
+				Type:        "string",
+				Required:    false,
+				Default:     "http://localhost:11434",
+				Description: "API地址（provider=ollama 时为本地地址）",
+			},
+			ParamInfo{
+				Name:        "api_key",
+				Type:        "string",
+				Required:    false,
+				Description: "API密钥(DeepSeek/Anthropic需要)",
+			},
+			ParamInfo{
+				Name:        "model",
+				Type:        "string",
+				Required:    false,
+				Default:     "qwen3:4b",
+				Description: "模型名称（默认使用 Ollama qwen3:4b）",
+			},
+			ParamInfo{
+				Name:        "temperature",
+				Type:        "number",
+				Required:    false,
+				Default:     0.0,
+				Description: "温度参数",
+			},
+		)
 	case "Tool.Time.Now":
 		params = append(params,
 			ParamInfo{
@@ -507,6 +584,144 @@ func getParamInfo(nodeType string) []ParamInfo {
 				Required:    false,
 				Default:     "2006-01-02 15:04:05",
 				Description: "时间格式",
+			},
+		)
+	case "Tool.Decide":
+		params = append(params,
+			ParamInfo{
+				Name:        "provider",
+				Type:        "string",
+				Required:    false,
+				Default:     "ollama",
+				Description: "提供商",
+				Options:     []string{"ollama", "deepseek", "anthropic"},
+			},
+			ParamInfo{
+				Name:        "base_url",
+				Type:        "string",
+				Required:    false,
+				Default:     "http://localhost:11434",
+				Description: "API地址（provider=ollama 时为本地地址）",
+			},
+			ParamInfo{
+				Name:        "api_key",
+				Type:        "string",
+				Required:    false,
+				Description: "API密钥(DeepSeek/Anthropic需要)",
+			},
+			ParamInfo{
+				Name:        "model",
+				Type:        "string",
+				Required:    false,
+				Default:     "Gemma3UThink:4b",
+				Description: "模型名称",
+			},
+			ParamInfo{
+				Name:        "temperature",
+				Type:        "number",
+				Required:    false,
+				Default:     0.0,
+				Description: "温度参数",
+			},
+			ParamInfo{
+				Name:        "max_retries",
+				Type:        "number",
+				Required:    false,
+				Default:     1,
+				Description: "最大重试次数",
+				Min:         float64Ptr(1),
+				Max:         float64Ptr(10),
+			},
+			ParamInfo{
+				Name:        "prompt",
+				Type:        "string",
+				Required:    false,
+				Description: "工具判断提示词",
+			},
+			ParamInfo{
+				Name:        "tools",
+				Type:        "array",
+				Required:    false,
+				Description: "可用工具列表",
+			},
+		)
+	case "Tool.Sufficient":
+		params = append(params,
+			ParamInfo{
+				Name:        "provider",
+				Type:        "string",
+				Required:    false,
+				Default:     "ollama",
+				Description: "提供商",
+				Options:     []string{"ollama", "deepseek", "anthropic"},
+			},
+			ParamInfo{
+				Name:        "base_url",
+				Type:        "string",
+				Required:    false,
+				Default:     "http://localhost:11434",
+				Description: "API地址（provider=ollama 时为本地地址）",
+			},
+			ParamInfo{
+				Name:        "api_key",
+				Type:        "string",
+				Required:    false,
+				Description: "API密钥(DeepSeek/Anthropic需要)",
+			},
+			ParamInfo{
+				Name:        "model",
+				Type:        "string",
+				Required:    false,
+				Default:     "Gemma3UThink:4b",
+				Description: "模型名称",
+			},
+			ParamInfo{
+				Name:        "temperature",
+				Type:        "number",
+				Required:    false,
+				Default:     0.0,
+				Description: "温度参数",
+			},
+			ParamInfo{
+				Name:        "max_retries",
+				Type:        "number",
+				Required:    false,
+				Default:     1,
+				Description: "最大重试次数",
+				Min:         float64Ptr(1),
+				Max:         float64Ptr(10),
+			},
+			ParamInfo{
+				Name:        "prompt",
+				Type:        "string",
+				Required:    false,
+				Description: "结果是否足够的判断提示词",
+			},
+			ParamInfo{
+				Name:        "max_attempts",
+				Type:        "number",
+				Required:    false,
+				Default:     3,
+				Description: "最大循环次数（达到后强制 enough）",
+				Min:         float64Ptr(1),
+				Max:         float64Ptr(20),
+			},
+			ParamInfo{
+				Name:        "key",
+				Type:        "string",
+				Required:    false,
+				Default:     "default",
+				Description: "循环计数器 key",
+			},
+		)
+	case "Tool.Execute":
+		params = append(params,
+			ParamInfo{
+				Name:        "format",
+				Type:        "string",
+				Required:    false,
+				Default:     "2006-01-02 15:04:05",
+				Description: "time 工具格式（可选）",
 			},
 		)
 	case "Input.Text":
@@ -775,6 +990,314 @@ func getParamInfo(nodeType string) []ParamInfo {
 				Required:    false,
 				Default:     "\n---\n",
 				Description: "all 输出端口的分隔符",
+			},
+		)
+	case "Flow.If":
+		params = append(params,
+			ParamInfo{
+				Name:        "operator",
+				Type:        "string",
+				Required:    false,
+				Default:     "eq",
+				Description: "比较运算符",
+				Options:     []string{"eq", "neq", "contains", "not_contains", "prefix", "suffix", "gt", "lt", "gte", "lte", "empty", "not_empty"},
+			},
+			ParamInfo{
+				Name:        "compare",
+				Type:        "string",
+				Required:    false,
+				Default:     "",
+				Description: "比较目标值（empty/not_empty 运算符不需要）",
+			},
+		)
+	case "Session.Entry":
+		params = append(params,
+			ParamInfo{
+				Name:        "channel",
+				Type:        "string",
+				Required:    false,
+				Default:     "web",
+				Description: "渠道标识",
+			},
+		)
+	case "Preprocess.Basic":
+		params = append(params,
+			ParamInfo{
+				Name:        "lang",
+				Type:        "string",
+				Required:    false,
+				Default:     "auto",
+				Description: "语言设置（占位）",
+			},
+		)
+	case "KB.QueryRewrite":
+		params = append(params,
+			ParamInfo{
+				Name:        "provider",
+				Type:        "string",
+				Required:    false,
+				Default:     "ollama",
+				Description: "提供商",
+				Options:     []string{"ollama", "deepseek", "anthropic"},
+			},
+			ParamInfo{
+				Name:        "base_url",
+				Type:        "string",
+				Required:    false,
+				Default:     "http://localhost:11434",
+				Description: "API地址（provider=ollama 时为本地地址）",
+			},
+			ParamInfo{
+				Name:        "api_key",
+				Type:        "string",
+				Required:    false,
+				Description: "API密钥(DeepSeek/Anthropic需要)",
+			},
+			ParamInfo{
+				Name:        "model",
+				Type:        "string",
+				Required:    false,
+				Default:     "qwen3:4b",
+				Description: "模型名称",
+			},
+			ParamInfo{
+				Name:        "temperature",
+				Type:        "number",
+				Required:    false,
+				Default:     0.0,
+				Description: "温度参数",
+			},
+			ParamInfo{
+				Name:        "max_retries",
+				Type:        "number",
+				Required:    false,
+				Default:     1,
+				Description: "最大重试次数",
+				Min:         float64Ptr(1),
+				Max:         float64Ptr(10),
+			},
+			ParamInfo{
+				Name:        "prompt",
+				Type:        "string",
+				Required:    false,
+				Description: "Query Rewrite 提示词",
+			},
+		)
+	case "KB.Search":
+		params = append(params,
+			ParamInfo{
+				Name:        "top_k",
+				Type:        "number",
+				Required:    false,
+				Default:     3,
+				Description: "返回条数",
+				Min:         float64Ptr(1),
+				Max:         float64Ptr(20),
+			},
+			ParamInfo{
+				Name:        "min_score",
+				Type:        "number",
+				Required:    false,
+				Default:     0.0,
+				Description: "最低相似度阈值(0-1)",
+				Min:         float64Ptr(0),
+				Max:         float64Ptr(1),
+			},
+			ParamInfo{
+				Name:        "agent_id",
+				Type:        "number",
+				Required:    false,
+				Default:     1,
+				Description: "Agent ID",
+				Min:         float64Ptr(1),
+			},
+		)
+	case "KB.RerankDedup":
+		params = append(params,
+			ParamInfo{
+				Name:        "min_score",
+				Type:        "number",
+				Required:    false,
+				Default:     0.0,
+				Description: "最低相似度阈值(0-1)",
+				Min:         float64Ptr(0),
+				Max:         float64Ptr(1),
+			},
+			ParamInfo{
+				Name:        "max_docs",
+				Type:        "number",
+				Required:    false,
+				Default:     5,
+				Description: "最多保留文档数",
+				Min:         float64Ptr(1),
+				Max:         float64Ptr(50),
+			},
+		)
+	case "KB.EvidencePack":
+		params = append(params,
+			ParamInfo{
+				Name:        "max_docs",
+				Type:        "number",
+				Required:    false,
+				Default:     5,
+				Description: "最多证据条数",
+				Min:         float64Ptr(1),
+				Max:         float64Ptr(20),
+			},
+			ParamInfo{
+				Name:        "max_chars",
+				Type:        "number",
+				Required:    false,
+				Default:     1200,
+				Description: "证据最大字符数",
+				Min:         float64Ptr(200),
+				Max:         float64Ptr(5000),
+			},
+		)
+	case "Context.InjectEvidence":
+		params = append(params,
+			ParamInfo{
+				Name:        "prefix",
+				Type:        "string",
+				Required:    false,
+				Default:     "Evidence:\\n",
+				Description: "注入前缀",
+			},
+		)
+	case "Context.Assemble":
+		params = append(params,
+			ParamInfo{
+				Name:        "note",
+				Type:        "string",
+				Required:    false,
+				Default:     "",
+				Description: "占位参数",
+			},
+		)
+	case "Context.WindowCheck":
+		params = append(params,
+			ParamInfo{
+				Name:        "max_chars",
+				Type:        "number",
+				Required:    false,
+				Default:     4000,
+				Description: "上下文最大字符数",
+				Min:         float64Ptr(500),
+				Max:         float64Ptr(20000),
+			},
+		)
+	case "Context.Summary":
+		params = append(params, ParamInfo{Name: "note", Type: "string", Required: false, Default: "", Description: "占位参数"})
+	case "Context.KeepRecent":
+		params = append(params, ParamInfo{Name: "note", Type: "string", Required: false, Default: "", Description: "占位参数"})
+	case "Context.KeepCitations":
+		params = append(params, ParamInfo{Name: "note", Type: "string", Required: false, Default: "", Description: "占位参数"})
+	case "Memory.Read":
+		params = append(params,
+			ParamInfo{
+				Name:        "agent_id",
+				Type:        "number",
+				Required:    false,
+				Default:     1,
+				Description: "Agent ID",
+				Min:         float64Ptr(1),
+			},
+			ParamInfo{
+				Name:        "limit",
+				Type:        "number",
+				Required:    false,
+				Default:     20,
+				Description: "最大记忆条数",
+				Min:         float64Ptr(1),
+				Max:         float64Ptr(200),
+			},
+		)
+	case "Memory.Candidate":
+		params = append(params, ParamInfo{Name: "note", Type: "string", Required: false, Default: "", Description: "占位参数"})
+	case "Memory.Gate":
+		params = append(params, ParamInfo{Name: "note", Type: "string", Required: false, Default: "", Description: "占位参数"})
+	case "Memory.Write":
+		params = append(params,
+			ParamInfo{
+				Name:        "user_id",
+				Type:        "string",
+				Required:    false,
+				Default:     "default",
+				Description: "用户ID",
+			},
+			ParamInfo{
+				Name:        "agent_id",
+				Type:        "number",
+				Required:    false,
+				Default:     1,
+				Description: "Agent ID",
+				Min:         float64Ptr(1),
+			},
+		)
+	case "Context.InjectMemory":
+		params = append(params, ParamInfo{Name: "note", Type: "string", Required: false, Default: "", Description: "占位参数"})
+	case "Tool.Validate":
+		params = append(params, ParamInfo{Name: "note", Type: "string", Required: false, Default: "", Description: "占位参数"})
+	case "Workflow.Call":
+		params = append(params,
+			ParamInfo{
+				Name:        "workflow_json",
+				Type:        "object",
+				Required:    true,
+				Description: "子工作流 JSON（对象或字符串）",
+			},
+			ParamInfo{
+				Name:        "input_text_node",
+				Type:        "string",
+				Required:    false,
+				Default:     "",
+				Description: "子工作流中 Input.Text 节点的 ID",
+			},
+		)
+	case "Flow.Switch":
+		params = append(params,
+			ParamInfo{
+				Name:        "cases",
+				Type:        "array",
+				Required:    true,
+				Description: "匹配值数组，如 [\"选项A\",\"选项B\",\"选项C\"]，依次对应输出端口 case_0, case_1, case_2",
+			},
+			ParamInfo{
+				Name:        "mode",
+				Type:        "string",
+				Required:    false,
+				Default:     "exact",
+				Description: "匹配模式",
+				Options:     []string{"exact", "contains", "prefix", "suffix", "iexact", "icontains"},
+			},
+		)
+	case "Flow.Loop":
+		params = append(params,
+			ParamInfo{
+				Name:        "max",
+				Type:        "number",
+				Required:    false,
+				Default:     1,
+				Description: "最大循环次数",
+				Min:         float64Ptr(1),
+				Max:         float64Ptr(100),
+			},
+			ParamInfo{
+				Name:        "key",
+				Type:        "string",
+				Required:    false,
+				Default:     "default",
+				Description: "循环计数器 key",
+			},
+		)
+	case "Flow.Debug":
+		params = append(params,
+			ParamInfo{
+				Name:        "label",
+				Type:        "string",
+				Required:    false,
+				Default:     "flow",
+				Description: "调试标签",
 			},
 		)
 	}

@@ -81,9 +81,10 @@ func (o *orchestrator) showContextStats(
 func removeThinkingTags(text string) string {
 	// 定义需要移除的thinking标签模式
 	patterns := []string{
-		`<think>[\s\S]*?</think>`,           // <think>...</think>
-		`<thinking>[\s\S]*?</thinking>`,     // <thinking>...</thinking>
+		`<think>[\s\S]*?</think>`,                 // <think>...</think>
+		`<thinking>[\s\S]*?</thinking>`,           // <thinking>...</thinking>
 		`<thinking_mode>[\s\S]*?</thinking_mode>`, // <thinking_mode>...</thinking_mode>
+
 	}
 
 	result := text

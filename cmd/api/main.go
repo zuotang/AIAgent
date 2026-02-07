@@ -25,7 +25,7 @@ import (
 
 func main() {
 	// 解析命令行参数
-	configFile := flag.String("config", "config.com.yaml", "配置文件路径")
+	configFile := flag.String("config", "config.yaml", "配置文件路径")
 	flag.Parse()
 
 	log.Println("Starting API server...")

@@ -1,120 +1,94 @@
 {
   "version": "1.0",
-  "meta": {
-    "id": "wf-tool-loop-001",
-    "name": "Tool Loop Workflow"
-  },
+  "meta": { "id": "wf-full-001", "name": "Full Pipeline" },
   "nodes": {
-    "input-user": {
-      "id": "input-user",
-      "type": "Input.Text",
-      "version": "1.0",
-      "params": { "text": "" }
-    },
+    "input-user": { "id": "input-user", "type": "Input.Text", "version": "1.0", "params": { "text": "" } },
+    "session-entry": { "id": "session-entry", "type": "Session.Entry", "version": "1.0", "params": { "channel": "web" } },
+    "preprocess": { "id": "preprocess", "type": "Preprocess.Basic", "version": "1.0", "params": {} },
 
-    "decide-tool": {
-      "id": "decide-tool",
-      "type": "Tool.Decide",
-      "version": "1.0",
-      "params": {
-        "model": "qwen2.5:7b",
-        "prompt": "判断用户问题是否需要工具。只输出 JSON: {\"need_tool\":true|false,\"tool_name\":\"calculator|time\",\"tool_args\":\"\"}"
-      }
-    },
+    "need-kb-if": { "id": "need-kb-if", "type": "Flow.If", "version": "1.0", "params": { "operator": "eq", "compare": "yes" } },
 
-    "need-tool-if": {
-      "id": "need-tool-if",
-      "type": "Flow.If",
-      "version": "1.0",
-      "params": { "operator": "eq", "compare": "yes" }
-    },
+    "kb-rewrite": { "id": "kb-rewrite", "type": "KB.QueryRewrite", "version": "1.0", "params": { "provider": "ollama", "base_url": "http://localhost:11434", "model": "qwen3:4b" } },
+    "kb-search": { "id": "kb-search", "type": "KB.Search", "version": "1.0", "params": { "top_k": 5, "min_score": 0.3, "agent_id": 1 } },
+    "kb-rerank": { "id": "kb-rerank", "type": "KB.RerankDedup", "version": "1.0", "params": { "min_score": 0.3, "max_docs": 5 } },
+    "kb-evidence": { "id": "kb-evidence", "type": "KB.EvidencePack", "version": "1.0", "params": { "max_docs": 5, "max_chars": 1200 } },
+    "kb-inject": { "id": "kb-inject", "type": "Context.InjectEvidence", "version": "1.0", "params": { "prefix": "Evidence:\n" } },
 
-    "tool-exec": {
-      "id": "tool-exec",
-      "type": "Tool.Execute",
-      "version": "1.0",
-      "params": {}
-    },
+    "mem-trigger": { "id": "mem-trigger", "type": "Flow.Switch", "version": "1.0", "params": { "cases": ["read", "write"] } },
+    "mem-read": { "id": "mem-read", "type": "Memory.Read", "version": "1.0", "params": { "agent_id": 1, "limit": 20 } },
+    "mem-cand": { "id": "mem-cand", "type": "Memory.Candidate", "version": "1.0", "params": {} },
+    "mem-gate": { "id": "mem-gate", "type": "Memory.Gate", "version": "1.0", "params": {} },
+    "mem-write": { "id": "mem-write", "type": "Memory.Write", "version": "1.0", "params": { "user_id": "default", "agent_id": 1 } },
+    "mem-inject": { "id": "mem-inject", "type": "Context.InjectMemory", "version": "1.0", "params": {} },
 
-    "tool-sufficient": {
-      "id": "tool-sufficient",
-      "type": "Tool.Sufficient",
-      "version": "1.0",
-      "params": {
-        "model": "qwen2.5:7b",
-        "prompt": "结果是否足以回答用户？只回答 YES 或 NO。",
-        "max_attempts": 3,
-        "key": "tool_loop_1"
-      }
-    },
+    "user-msg": { "id": "user-msg", "type": "Transform.TextToMessages", "version": "1.0", "params": { "role": "user" } },
+    "system-msg": { "id": "system-msg", "type": "Transform.TextToMessages", "version": "1.0", "params": { "role": "system" } },
+    "system-text": { "id": "system-text", "type": "Input.Text", "version": "1.0", "params": { "text": "你是助手，请回答用户问题。" } },
 
-    "final-system": {
-      "id": "final-system",
-      "type": "Input.Text",
-      "version": "1.0",
-      "params": { "text": "你是助手，请给出最终回答。" }
-    },
-    "final-system-msg": {
-      "id": "final-system-msg",
-      "type": "Transform.TextToMessages",
-      "version": "1.0",
-      "params": { "role": "system" }
-    },
-    "final-user-msg": {
-      "id": "final-user-msg",
-      "type": "Transform.TextToMessages",
-      "version": "1.0",
-      "params": { "role": "user" }
-    },
-    "final-pack": {
-      "id": "final-pack",
-      "type": "Context.Pack",
-      "version": "1.0",
-      "params": {}
-    },
-    "final-llm": {
-      "id": "final-llm",
-      "type": "LLM.Generate",
-      "version": "1.0",
-      "params": { "model": "qwen2.5:7b" }
-    },
-    "final-text": {
-      "id": "final-text",
-      "type": "Transform.MessagesToText",
-      "version": "1.0",
-      "params": {}
-    },
-    "output": {
-      "id": "output",
-      "type": "Output.Text",
-      "version": "1.0",
-      "params": {}
-    }
+    "assemble": { "id": "assemble", "type": "Context.Assemble", "version": "1.0", "params": {} },
+    "window-check": { "id": "window-check", "type": "Context.WindowCheck", "version": "1.0", "params": { "max_chars": 4000 } },
+    "over-if": { "id": "over-if", "type": "Flow.If", "version": "1.0", "params": { "operator": "eq", "compare": "yes" } },
+    "compress": { "id": "compress", "type": "Context.Compress", "version": "1.0", "params": {} },
+    "summary": { "id": "summary", "type": "Context.Summary", "version": "1.0", "params": {} },
+    "keep-recent": { "id": "keep-recent", "type": "Context.KeepRecent", "version": "1.0", "params": {} },
+    "keep-cite": { "id": "keep-cite", "type": "Context.KeepCitations", "version": "1.0", "params": {} },
+
+    "llm": { "id": "llm", "type": "LLM.Generate", "version": "1.0", "params": { "provider": "ollama", "base_url": "http://localhost:11434", "model": "qwen3:4b" } },
+
+    "tool-decide": { "id": "tool-decide", "type": "Tool.Decide", "version": "1.0", "params": { "provider": "ollama", "base_url": "http://localhost:11434", "model": "Gemma3UThink:4b" } },
+    "tool-if": { "id": "tool-if", "type": "Flow.If", "version": "1.0", "params": { "operator": "eq", "compare": "yes" } },
+    "tool-exec": { "id": "tool-exec", "type": "Tool.Execute", "version": "1.0", "params": {} },
+    "tool-validate": { "id": "tool-validate", "type": "Tool.Validate", "version": "1.0", "params": {} },
+
+    "to-text": { "id": "to-text", "type": "Transform.MessagesToText", "version": "1.0", "params": {} },
+    "output": { "id": "output", "type": "Output.Text", "version": "1.0", "params": {} }
   },
-
   "edges": [
-    { "id": "e1", "from": { "node": "input-user", "port": "text" }, "to": { "node": "decide-tool", "port": "text" }, "type": "data" },
-    { "id": "e2", "from": { "node": "decide-tool", "port": "need_tool" }, "to": { "node": "need-tool-if", "port": "value" }, "type": "data" },
+    { "id": "e1", "from": { "node": "input-user", "port": "text" }, "to": { "node": "session-entry", "port": "text" }, "type": "data" },
+    { "id": "e2", "from": { "node": "session-entry", "port": "text" }, "to": { "node": "preprocess", "port": "text" }, "type": "data" },
 
-    { "id": "e3", "from": { "node": "need-tool-if", "port": "true" }, "to": { "node": "tool-exec", "port": "in" }, "type": "flow" },
+    { "id": "e3", "from": { "node": "preprocess", "port": "need_kb" }, "to": { "node": "need-kb-if", "port": "value" }, "type": "data" },
+    { "id": "e4", "from": { "node": "need-kb-if", "port": "true" }, "to": { "node": "kb-rewrite", "port": "in" }, "type": "flow" },
+    { "id": "e5", "from": { "node": "preprocess", "port": "text" }, "to": { "node": "kb-rewrite", "port": "text" }, "type": "data" },
+    { "id": "e6", "from": { "node": "kb-rewrite", "port": "query" }, "to": { "node": "kb-search", "port": "query" }, "type": "data" },
+    { "id": "e7", "from": { "node": "kb-search", "port": "kb_docs" }, "to": { "node": "kb-rerank", "port": "kb_docs" }, "type": "data" },
+    { "id": "e8", "from": { "node": "kb-rerank", "port": "kb_docs" }, "to": { "node": "kb-evidence", "port": "kb_docs" }, "type": "data" },
+    { "id": "e9", "from": { "node": "kb-evidence", "port": "evidence" }, "to": { "node": "kb-inject", "port": "evidence" }, "type": "data" },
 
-    { "id": "e4", "from": { "node": "decide-tool", "port": "tool_call" }, "to": { "node": "tool-exec", "port": "tool_call" }, "type": "data" },
+    { "id": "e10", "from": { "node": "preprocess", "port": "mem_action" }, "to": { "node": "mem-trigger", "port": "value" }, "type": "data" },
+    { "id": "e11", "from": { "node": "mem-trigger", "port": "case_0" }, "to": { "node": "mem-read", "port": "in" }, "type": "flow" },
+    { "id": "e12", "from": { "node": "mem-trigger", "port": "case_1" }, "to": { "node": "mem-cand", "port": "in" }, "type": "flow" },
+    { "id": "e13", "from": { "node": "preprocess", "port": "text" }, "to": { "node": "mem-cand", "port": "text" }, "type": "data" },
+    { "id": "e14", "from": { "node": "mem-cand", "port": "memory_items" }, "to": { "node": "mem-gate", "port": "memory_items" }, "type": "data" },
+    { "id": "e15", "from": { "node": "mem-gate", "port": "memory_items" }, "to": { "node": "mem-write", "port": "memory_items" }, "type": "data" },
+    { "id": "e16", "from": { "node": "mem-read", "port": "memory_text" }, "to": { "node": "mem-inject", "port": "memory_text" }, "type": "data" },
 
-    { "id": "e5", "from": { "node": "tool-exec", "port": "tool_result" }, "to": { "node": "tool-sufficient", "port": "tool_result" }, "type": "data" },
-    { "id": "e6", "from": { "node": "input-user", "port": "text" }, "to": { "node": "tool-sufficient", "port": "user_text" }, "type": "data" },
+    { "id": "e17", "from": { "node": "system-text", "port": "text" }, "to": { "node": "system-msg", "port": "text" }, "type": "data" },
+    { "id": "e18", "from": { "node": "preprocess", "port": "text" }, "to": { "node": "user-msg", "port": "text" }, "type": "data" },
+    { "id": "e19", "from": { "node": "kb-inject", "port": "messages" }, "to": { "node": "assemble", "port": "system_messages" }, "type": "data" },
+    { "id": "e20", "from": { "node": "mem-inject", "port": "messages" }, "to": { "node": "assemble", "port": "system_messages" }, "type": "data" },
+    { "id": "e21", "from": { "node": "system-msg", "port": "messages" }, "to": { "node": "assemble", "port": "system_messages" }, "type": "data" },
+    { "id": "e22", "from": { "node": "user-msg", "port": "messages" }, "to": { "node": "assemble", "port": "user_messages" }, "type": "data" },
 
-    { "id": "e7", "from": { "node": "tool-sufficient", "port": "not_enough" }, "to": { "node": "decide-tool", "port": "in" }, "type": "flow" },
+    { "id": "e23", "from": { "node": "assemble", "port": "context_pack" }, "to": { "node": "window-check", "port": "context_pack" }, "type": "data" },
+    { "id": "e24", "from": { "node": "window-check", "port": "over" }, "to": { "node": "over-if", "port": "value" }, "type": "data" },
+    { "id": "e25", "from": { "node": "over-if", "port": "true" }, "to": { "node": "compress", "port": "in" }, "type": "flow" },
+    { "id": "e26", "from": { "node": "assemble", "port": "context_pack" }, "to": { "node": "compress", "port": "context_pack" }, "type": "data" },
+    { "id": "e27", "from": { "node": "compress", "port": "context_pack" }, "to": { "node": "summary", "port": "context_pack" }, "type": "data" },
+    { "id": "e28", "from": { "node": "summary", "port": "context_pack" }, "to": { "node": "keep-recent", "port": "context_pack" }, "type": "data" },
+    { "id": "e29", "from": { "node": "keep-recent", "port": "context_pack" }, "to": { "node": "keep-cite", "port": "context_pack" }, "type": "data" },
 
-    { "id": "e8", "from": { "node": "tool-sufficient", "port": "enough" }, "to": { "node": "final-pack", "port": "messages" }, "type": "flow" },
+    { "id": "e30", "from": { "node": "assemble", "port": "context_pack" }, "to": { "node": "llm", "port": "context_pack" }, "type": "data" },
+    { "id": "e31", "from": { "node": "keep-cite", "port": "context_pack" }, "to": { "node": "llm", "port": "context_pack" }, "type": "data" },
 
-    { "id": "e9", "from": { "node": "final-system", "port": "text" }, "to": { "node": "final-system-msg", "port": "text" }, "type": "data" },
-    { "id": "e10", "from": { "node": "input-user", "port": "text" }, "to": { "node": "final-user-msg", "port": "text" }, "type": "data" },
+    { "id": "e32", "from": { "node": "llm", "port": "messages" }, "to": { "node": "tool-decide", "port": "text" }, "type": "data" },
+    { "id": "e33", "from": { "node": "tool-decide", "port": "need_tool" }, "to": { "node": "tool-if", "port": "value" }, "type": "data" },
+    { "id": "e34", "from": { "node": "tool-if", "port": "true" }, "to": { "node": "tool-exec", "port": "in" }, "type": "flow" },
+    { "id": "e35", "from": { "node": "tool-decide", "port": "tool_call" }, "to": { "node": "tool-exec", "port": "tool_call" }, "type": "data" },
+    { "id": "e36", "from": { "node": "tool-exec", "port": "tool_result" }, "to": { "node": "tool-validate", "port": "tool_result" }, "type": "data" },
+    { "id": "e37", "from": { "node": "tool-validate", "port": "valid" }, "to": { "node": "llm", "port": "in" }, "type": "flow" },
 
-    { "id": "e11", "from": { "node": "final-system-msg", "port": "messages" }, "to": { "node": "final-pack", "port": "system_messages" }, "type": "data" },
-    { "id": "e12", "from": { "node": "final-user-msg", "port": "messages" }, "to": { "node": "final-pack", "port": "user_messages" }, "type": "data" },
-
-    { "id": "e13", "from": { "node": "final-pack", "port": "context_pack" }, "to": { "node": "final-llm", "port": "context_pack" }, "type": "data" },
-    { "id": "e14", "from": { "node": "final-llm", "port": "messages" }, "to": { "node": "final-text", "port": "messages" }, "type": "data" },
-    { "id": "e15", "from": { "node": "final-text", "port": "text" }, "to": { "node": "output", "port": "text" }, "type": "data" }
+    { "id": "e38", "from": { "node": "llm", "port": "messages" }, "to": { "node": "to-text", "port": "messages" }, "type": "data" },
+    { "id": "e39", "from": { "node": "to-text", "port": "text" }, "to": { "node": "output", "port": "text" }, "type": "data" }
   ]
 }
