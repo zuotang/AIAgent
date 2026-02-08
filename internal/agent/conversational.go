@@ -29,14 +29,8 @@ func NewConversationalAgent(llmClient models.LLMClient, debug bool, timeout int)
 
 // Run 执行Agent任务
 func (a *ConversationalAgent) Run(ctx context.Context, input Input) (Output, error) {
-	// 构建prompt
-	prompt := a.buildPrompt(input)
-
 	// 构建消息
-	msgs := []models.ChatMessage{
-		{Role: "system", Content: input.SystemPrompt},
-		{Role: "user", Content: prompt},
-	}
+	msgs := a.buildMessages(input)
 
 	// 将消息序列化为字符串，存储到 LLMInput
 	llmInput, _ := json.MarshalIndent(msgs, "", "  ")
@@ -90,14 +84,8 @@ func (a *ConversationalAgent) Run(ctx context.Context, input Input) (Output, err
 
 // RunStream 流式执行Agent任务
 func (a *ConversationalAgent) RunStream(ctx context.Context, input Input, callback func(string) error) (Output, error) {
-	// 构建prompt
-	prompt := a.buildPrompt(input)
-
 	// 构建消息
-	msgs := []models.ChatMessage{
-		{Role: "system", Content: input.SystemPrompt},
-		{Role: "user", Content: prompt},
-	}
+	msgs := a.buildMessages(input)
 
 	// 将消息序列化为字符串，存储到 LLMInput
 	llmInput, _ := json.MarshalIndent(msgs, "", "  ")
@@ -150,31 +138,40 @@ func (a *ConversationalAgent) RunStream(ctx context.Context, input Input, callba
 	return output, nil
 }
 
-// buildPrompt 构建完整的prompt
-func (a *ConversationalAgent) buildPrompt(input Input) string {
-	var sb strings.Builder
+// buildMessages 构建 messages 数组（严格遵循 user-assistant 交替）
+func (a *ConversationalAgent) buildMessages(input Input) []models.ChatMessage {
+	msgs := make([]models.ChatMessage, 0, 2+len(input.ConversationMessages)+2)
 
-	sb.WriteString("请基于以下信息回应用户：\n\n")
-
-	if input.Conversation != "" {
-		sb.WriteString("【短期对话窗口】（用于保持上下文）\n")
-		sb.WriteString(input.Conversation)
-		sb.WriteString("\n\n")
+	var systemParts []string
+	if input.SystemPrompt != "" {
+		systemParts = append(systemParts, input.SystemPrompt)
 	}
-
 	if input.Memory != "" {
-		sb.WriteString(input.Memory)
-		sb.WriteString("\n\n")
+		systemParts = append(systemParts, input.Memory)
+	}
+	if input.ConversationSummary != "" {
+		systemParts = append(systemParts, "对话摘要：\n"+input.ConversationSummary)
+	}
+	if len(systemParts) > 0 {
+		msgs = append(msgs, models.ChatMessage{Role: "system", Content: strings.Join(systemParts, "\n\n")})
 	}
 
-	sb.WriteString("【用户输入】\n")
-	sb.WriteString(input.Message)
-	sb.WriteString("\n\n")
+	lastRole := ""
+	for _, m := range input.ConversationMessages {
+		role := strings.ToLower(strings.TrimSpace(m.Role))
+		if role != "user" && role != "assistant" {
+			continue
+		}
+		if role == lastRole {
+			continue
+		}
+		msgs = append(msgs, models.ChatMessage{Role: role, Content: m.Content})
+		lastRole = role
+	}
 
-	//sb.WriteString("必须先回答用户问题，再给用户提供选择。")
-	//sb.WriteString("- 给出3到5个选择以~#开头，格式：~#1、选择(10字以内)\n~#2、选择\n")
+	msgs = append(msgs, models.ChatMessage{Role: "user", Content: input.Message})
 
-	return sb.String()
+	return msgs
 }
 
 // generateResponse 生成响应（支持流式）

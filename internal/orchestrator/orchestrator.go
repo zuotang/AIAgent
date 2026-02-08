@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 	"time"
 
@@ -17,8 +18,8 @@ import (
 
 // Orchestrator 编排器接口
 type Orchestrator interface {
-	ProcessMessage(ctx context.Context, userID string, agentID uint, userText string, conversationHistory string, systemPrompt string) (agent.Output, error)
-	ProcessMessageStream(ctx context.Context, userID string, agentID uint, userText string, conversationHistory string, systemPrompt string, callback func(string) error) (agent.Output, error)
+	ProcessMessage(ctx context.Context, userID string, agentID uint, userText string, conversationHistory string, conversationMessages []models.ChatMessage, systemPrompt string) (agent.Output, error)
+	ProcessMessageStream(ctx context.Context, userID string, agentID uint, userText string, conversationHistory string, conversationMessages []models.ChatMessage, systemPrompt string, callback func(string) error) (agent.Output, error)
 	GetConfig() *config.Config
 	GetStore() *memory.Store
 	GetVectorStore() *rag.QdrantStore
@@ -114,6 +115,7 @@ func (o *orchestrator) ProcessMessage(
 	agentID uint,
 	userText string,
 	conversationHistory string,
+	conversationMessages []models.ChatMessage,
 	systemPrompt string,
 ) (agent.Output, error) {
 	// 1. 智能路由：使用小模型快速分类查询类型
@@ -148,78 +150,27 @@ func (o *orchestrator) ProcessMessage(
 	// 	o.showContextStats(systemPrompt, structuredText, semanticDocs, conversationHistory, userText)
 	// }
 
-	// 5. 增量压缩对话上下文（基于 token 占用率触发）
+	// 5. 不进行上下文压缩，直接使用原始对话历史
 	compressedContext := conversationHistory
 
-	// 获取上次的压缩上下文
-	lastCompressed, err := o.memStore.GetCompressedContext(ctx, userID, agentID)
-	var fullContext string
-	if err == nil && lastCompressed.CompressedText != "" {
-		// 有上次的压缩结果，计算总上下文长度（压缩结果 + 新消息）
-		fullContext = lastCompressed.CompressedText + "\n\n" + conversationHistory
-	} else {
-		// 没有上次的压缩结果，使用原始上下文
-		fullContext = conversationHistory
-	}
-
-	// 计算总上下文的 token 占用率
-	stats := utils.CalculateContextStats(systemPrompt, combinedContext, fullContext, userText, o.chatModel)
-	shouldCompress := ShouldCompressContextByTokens(stats, 60.0) // 保留约 40% 余量
-	if o.config.Base.Debug {
-		log.Printf("[DEBUG] 上下文占用率: %.1f%% (Total=%d, Limit=%d)", stats.UsagePercent, stats.TotalTokens, stats.ModelLimit)
-		var lastCompressedLen int
-		if lastCompressed != nil {
-			lastCompressedLen = len(lastCompressed.CompressedText)
-		}
-		log.Printf("[DEBUG] 上次压缩长度: %d, 新消息长度: %d, 总长度: %d",
-			lastCompressedLen, len(conversationHistory), len(fullContext))
-	}
-
-	if shouldCompress {
-		if o.config.Base.Debug {
-			log.Printf("[DEBUG] 触发增量压缩 - 新消息长度: %d", len(conversationHistory))
-		}
-
-		// 使用 extractor 模型进行增量压缩
-		compressorModel := o.config.Extractor.Model
-		if compressorModel == "" {
-			compressorModel = o.chatModel
-		}
-
-		// 只压缩新消息，CompressContextIncremental 会自动合并上次的压缩结果
-		compressed, err := CompressContextIncremental(ctx, o.extractorClient, o.memStore, userID, agentID, conversationHistory, 0, compressorModel, 200)
-		if err != nil {
-			if o.config.Base.Debug {
-				log.Printf("[DEBUG] 增量压缩失败: %v，使用原始上下文", err)
-			}
-			// 压缩失败，使用完整上下文
-			compressedContext = fullContext
-		} else {
-			compressedContext = compressed
-			if o.config.Base.Debug {
-				log.Printf("[DEBUG] 增量压缩完成 - 压缩后长度: %d", len(compressedContext))
-				log.Printf("[DEBUG] 压缩后内容: %s", compressedContext)
-			}
-		}
-	} else {
-		// 未达到压缩阈值，使用完整上下文（上次压缩 + 新消息）
-		compressedContext = fullContext
-		if o.config.Base.Debug {
-			if lastCompressed != nil && lastCompressed.CompressedText != "" {
-				log.Printf("[DEBUG] 使用上次压缩 + 新消息作为上下文 - 总长度: %d", len(compressedContext))
-			} else {
-				log.Printf("[DEBUG] 首次对话或无压缩历史 - 使用原始上下文，长度: %d", len(conversationHistory))
-			}
+	// 6. 读取对话摘要（若存在且落后最近窗口）
+	var conversationSummary string
+	cutoffID := o.getRecentWindowCutoffID(ctx, userID, agentID, 20)
+	if compressed, err := o.memStore.GetCompressedContext(ctx, userID, agentID); err == nil && compressed.CompressedText != "" {
+		if cutoffID == 0 || compressed.LastMessageID < cutoffID {
+			conversationSummary = compressed.CompressedText
 		}
 	}
 
-	// 6. 构建Agent输入
+	// 7. 构建Agent输入
 	input := agent.Input{
-		UserID:       userID,
-		Message:      userText,
-		SystemPrompt: systemPrompt,
-		Memory:       combinedContext, // 合并的记忆和知识库上下文
-		Conversation: compressedContext,
+		UserID:               userID,
+		Message:              userText,
+		SystemPrompt:         systemPrompt,
+		Memory:               combinedContext, // 合并的记忆和知识库上下文
+		Conversation:         compressedContext,
+		ConversationMessages: conversationMessages,
+		ConversationSummary:  conversationSummary,
 	}
 
 	// 7. 执行Agent
@@ -237,46 +188,24 @@ func (o *orchestrator) ProcessMessage(
 
 	// 移除thinking标签后再保存助手响应
 	cleanedResponse := removeThinkingTags(output.Response)
+	cleanedResponse = stripParenthetical(cleanedResponse)
 	assistantMsgID, err := o.memStore.SaveChatMessage(ctx, userID, "assistant", cleanedResponse, sessionID, agentID)
 	if err != nil && o.config.Base.Debug {
 		log.Printf("[DEBUG] 保存助手响应失败: %v", err)
 	}
 
-	// 更新压缩上下文的LastMessageID
+	// 异步更新对话摘要（落后最近20轮，最大600字）
 	if assistantMsgID > 0 {
-		lastCompressed, err := o.memStore.GetCompressedContext(ctx, userID, agentID)
-		if err == nil {
-			// 如果未触发压缩，需要追加本次对话到压缩上下文
-			if !shouldCompress {
-				// 构建本次对话内容（使用清理后的响应）
-				cleanUser := utils.PreprocessLite(userText)
-				cleanAssistant := utils.PreprocessLite(cleanedResponse)
-				currentTurn := fmt.Sprintf("User: %s\nAssistant: %s", cleanUser, cleanAssistant)
-				// 追加到压缩上下文
-				lastCompressed.CompressedText = lastCompressed.CompressedText + "\n\n" + currentTurn
-				if o.config.Base.Debug {
-					log.Printf("[DEBUG] 追加本次对话到压缩上下文 - 新增长度: %d", len(currentTurn))
-				}
+		go func() {
+			// 使用 background context 避免父 context 取消影响异步任务
+			// 设置超时防止 goroutine 泄漏
+			bgCtx, cancel := context.WithTimeout(context.Background(), time.Duration(o.config.Base.Timeout)*time.Second)
+			defer cancel()
+
+			if err := o.updateConversationSummary(bgCtx, userID, agentID, 20, 600); err != nil && o.config.Base.Debug {
+				log.Printf("[DEBUG] 异步更新对话摘要失败: %v", err)
 			}
-			// 更新LastMessageID为最新的助手消息ID
-			lastCompressed.LastMessageID = assistantMsgID
-			if err := o.memStore.UpsertCompressedContext(ctx, lastCompressed); err != nil && o.config.Base.Debug {
-				log.Printf("[DEBUG] 更新LastMessageID失败: %v", err)
-			} else if o.config.Base.Debug {
-				log.Printf("[DEBUG] 已更新LastMessageID: %d", assistantMsgID)
-			}
-		} else if shouldCompress {
-			// 如果没有压缩上下文但触发了压缩，创建一个新的
-			newCompressed := &memory.CompressedContext{
-				UserID:         userID,
-				AgentID:        agentID,
-				CompressedText: compressedContext,
-				LastMessageID:  assistantMsgID,
-			}
-			if err := o.memStore.UpsertCompressedContext(ctx, newCompressed); err != nil && o.config.Base.Debug {
-				log.Printf("[DEBUG] 创建压缩上下文失败: %v", err)
-			}
-		}
+		}()
 	}
 
 	// 5. 异步提取并存储记忆（智能触发）
@@ -313,6 +242,7 @@ func (o *orchestrator) ProcessMessageStream(
 	agentID uint,
 	userText string,
 	conversationHistory string,
+	conversationMessages []models.ChatMessage,
 	systemPrompt string,
 	callback func(string) error,
 ) (agent.Output, error) {
@@ -348,76 +278,27 @@ func (o *orchestrator) ProcessMessageStream(
 	// 	o.showContextStats(systemPrompt, structuredText, semanticDocs, conversationHistory, userText)
 	// }
 
-	// 5. 增量压缩对话上下文（基于 token 占用率触发）
+	// 5. 不进行上下文压缩，直接使用原始对话历史
 	compressedContext := conversationHistory
 
-	// 获取上次的压缩上下文
-	lastCompressedStream, err := o.memStore.GetCompressedContext(ctx, userID, agentID)
-	var fullContextStream string
-	if err == nil && lastCompressedStream.CompressedText != "" {
-		// 有上次的压缩结果，计算总上下文长度（压缩结果 + 新消息）
-		fullContextStream = lastCompressedStream.CompressedText + "\n\n" + conversationHistory
-	} else {
-		// 没有上次的压缩结果，使用原始上下文
-		fullContextStream = conversationHistory
-	}
-
-	// 计算总上下文的 token 占用率
-	stats := utils.CalculateContextStats(systemPrompt, combinedContext, fullContextStream, userText, o.chatModel)
-	shouldCompressStream := ShouldCompressContextByTokens(stats, 60.0) // 保留约 40% 余量
-	if o.config.Base.Debug {
-		log.Printf("[DEBUG] 流式处理 - 上下文占用率: %.1f%% (Total=%d, Limit=%d)", stats.UsagePercent, stats.TotalTokens, stats.ModelLimit)
-		var lastCompressedLen int
-		if lastCompressedStream != nil {
-			lastCompressedLen = len(lastCompressedStream.CompressedText)
-		}
-		log.Printf("[DEBUG] 流式处理 - 上次压缩长度: %d, 新消息长度: %d, 总长度: %d",
-			lastCompressedLen, len(conversationHistory), len(fullContextStream))
-	}
-
-	if shouldCompressStream {
-		if o.config.Base.Debug {
-			log.Printf("[DEBUG] 流式处理 - 触发增量压缩 - 新消息长度: %d", len(conversationHistory))
-		}
-
-		compressorModel := o.config.Extractor.Model
-		if compressorModel == "" {
-			compressorModel = o.chatModel
-		}
-
-		// 只压缩新消息，CompressContextIncremental 会自动合并上次的压缩结果
-		compressed, err := CompressContextIncremental(ctx, o.extractorClient, o.memStore, userID, agentID, conversationHistory, 0, compressorModel, 200)
-		if err != nil {
-			if o.config.Base.Debug {
-				log.Printf("[DEBUG] 增量压缩失败: %v，使用原始上下文", err)
-			}
-			// 压缩失败，使用完整上下文
-			compressedContext = fullContextStream
-		} else {
-			compressedContext = compressed
-			if o.config.Base.Debug {
-				log.Printf("[DEBUG] 流式处理 - 增量压缩完成 - 压缩后长度: %d", len(compressedContext))
-			}
-		}
-	} else {
-		// 未达到压缩阈值，使用完整上下文（上次压缩 + 新消息）
-		compressedContext = fullContextStream
-		if o.config.Base.Debug {
-			if lastCompressedStream != nil && lastCompressedStream.CompressedText != "" {
-				log.Printf("[DEBUG] 流式处理 - 使用上次压缩 + 新消息作为上下文 - 总长度: %d", len(compressedContext))
-			} else {
-				log.Printf("[DEBUG] 流式处理 - 首次对话或无压缩历史 - 使用原始上下文，长度: %d", len(conversationHistory))
-			}
+	// 6. 读取对话摘要（若存在且落后最近窗口）
+	var conversationSummary string
+	cutoffID := o.getRecentWindowCutoffID(ctx, userID, agentID, 20)
+	if compressed, err := o.memStore.GetCompressedContext(ctx, userID, agentID); err == nil && compressed.CompressedText != "" {
+		if cutoffID == 0 || compressed.LastMessageID < cutoffID {
+			conversationSummary = compressed.CompressedText
 		}
 	}
 
-	// 6. 构建Agent输入
+	// 7. 构建Agent输入
 	input := agent.Input{
-		UserID:       userID,
-		Message:      userText,
-		SystemPrompt: systemPrompt,
-		Memory:       combinedContext, // 合并的记忆和知识库上下文
-		Conversation: compressedContext,
+		UserID:               userID,
+		Message:              userText,
+		SystemPrompt:         systemPrompt,
+		Memory:               combinedContext, // 合并的记忆和知识库上下文
+		Conversation:         compressedContext,
+		ConversationMessages: conversationMessages,
+		ConversationSummary:  conversationSummary,
 	}
 
 	// 7. 执行Agent流式处理
@@ -435,33 +316,24 @@ func (o *orchestrator) ProcessMessageStream(
 
 	// 移除thinking标签后再保存助手响应
 	cleanedResponseStream := removeThinkingTags(output.Response)
+	cleanedResponseStream = stripParenthetical(cleanedResponseStream)
 	assistantMsgID, err := o.memStore.SaveChatMessage(ctx, userID, "assistant", cleanedResponseStream, sessionID, agentID)
 	if err != nil && o.config.Base.Debug {
 		log.Printf("[DEBUG] 保存助手响应失败: %v", err)
 	}
 
-	// 更新压缩上下文的LastMessageID
+	// 异步更新对话摘要（落后最近20轮，最大600字）
 	if assistantMsgID > 0 {
-		lastCompressed, err := o.memStore.GetCompressedContext(ctx, userID, agentID)
-		if err == nil {
-			// 更新LastMessageID为最新的助手消息ID
-			lastCompressed.LastMessageID = assistantMsgID
-			if err := o.memStore.UpsertCompressedContext(ctx, lastCompressed); err != nil && o.config.Base.Debug {
-				log.Printf("[DEBUG] 更新LastMessageID失败: %v", err)
-			} else if o.config.Base.Debug {
-				log.Printf("[DEBUG] 流式处理 - 已更新LastMessageID: %d", assistantMsgID)
+		go func() {
+			// 使用 background context 避免父 context 取消影响异步任务
+			// 设置超时防止 goroutine 泄漏
+			bgCtx, cancel := context.WithTimeout(context.Background(), time.Duration(o.config.Base.Timeout)*time.Second)
+			defer cancel()
+
+			if err := o.updateConversationSummary(bgCtx, userID, agentID, 20, 600); err != nil && o.config.Base.Debug {
+				log.Printf("[DEBUG] 流式处理 - 异步更新对话摘要失败: %v", err)
 			}
-		} else if ShouldCompressContext(conversationHistory, 4000) {
-			// 如果没有压缩上下文但触发了压缩，创建一个新的
-			newCompressed := &memory.CompressedContext{
-				UserID:         userID,
-				CompressedText: compressedContext,
-				LastMessageID:  assistantMsgID,
-			}
-			if err := o.memStore.UpsertCompressedContext(ctx, newCompressed); err != nil && o.config.Base.Debug {
-				log.Printf("[DEBUG] 创建压缩上下文失败: %v", err)
-			}
-		}
+		}()
 	}
 
 	// 6. 异步提取并存储记忆（智能触发）
@@ -491,8 +363,129 @@ func (o *orchestrator) ProcessMessageStream(
 	return output, nil
 }
 
+// getRecentWindowCutoffID 返回“最近N轮”窗口中最早消息的ID
+// 若消息不足则返回0。
+func (o *orchestrator) getRecentWindowCutoffID(ctx context.Context, userID string, agentID uint, turns int) uint {
+	if turns <= 0 {
+		return 0
+	}
+	limit := turns * 2
+	msgs, err := o.memStore.GetChatHistoryWithCursor(ctx, userID, agentID, 0, limit)
+	if err != nil || len(msgs) == 0 {
+		return 0
+	}
+	// msgs为ID倒序，最后一个为最早
+	return msgs[len(msgs)-1].ID
+}
 
+// updateConversationSummary 更新对话摘要，确保摘要落后最近N轮
+func (o *orchestrator) updateConversationSummary(ctx context.Context, userID string, agentID uint, turns int, maxLen int) error {
+	cutoffID := o.getRecentWindowCutoffID(ctx, userID, agentID, turns)
+	if cutoffID == 0 {
+		return nil
+	}
 
+	compressed, err := o.memStore.GetCompressedContext(ctx, userID, agentID)
+	var lastID uint
+	if err == nil && compressed != nil {
+		lastID = compressed.LastMessageID
+	}
+	// 如果摘要已覆盖最近窗口，需重建摘要（防止摘要与最近N轮重复）
+	if lastID >= cutoffID {
+		if err := o.memStore.ClearCompressedContext(ctx, userID, agentID); err != nil {
+			return err
+		}
+		allMsgs, err := o.memStore.GetChatHistoryBetweenIDs(ctx, userID, agentID, 0, cutoffID, 500)
+		if err != nil {
+			return err
+		}
+		newConversation, newLastID := buildConversationText(allMsgs)
+		if newConversation == "" || newLastID == 0 {
+			return nil
+		}
+		compressorModel := o.config.Extractor.Model
+		if compressorModel == "" {
+			compressorModel = o.chatModel
+		}
+		_, err = CompressContextIncremental(ctx, o.extractorClient, o.memStore, userID, agentID, newConversation, newLastID, compressorModel, maxLen)
+		return err
+	}
+	// 已经追到最近窗口之前，无需更新
+	if lastID >= cutoffID-1 {
+		return nil
+	}
+
+	// 读取待摘要的历史消息（ID在(lastID, cutoffID)）
+	var batch []memory.ChatMessage
+	nextAfterID := lastID
+	for {
+		msgs, err := o.memStore.GetChatHistoryBetweenIDs(ctx, userID, agentID, nextAfterID, cutoffID, 200)
+		if err != nil {
+			return err
+		}
+		if len(msgs) == 0 {
+			break
+		}
+		batch = append(batch, msgs...)
+		nextAfterID = msgs[len(msgs)-1].ID
+		if nextAfterID >= cutoffID-1 {
+			break
+		}
+	}
+
+	newConversation, newLastID := buildConversationText(batch)
+	if newConversation == "" || newLastID == 0 {
+		return nil
+	}
+
+	compressorModel := o.config.Extractor.Model
+	if compressorModel == "" {
+		compressorModel = o.chatModel
+	}
+
+	_, err = CompressContextIncremental(ctx, o.extractorClient, o.memStore, userID, agentID, newConversation, newLastID, compressorModel, maxLen)
+	return err
+}
+
+func buildConversationText(msgs []memory.ChatMessage) (string, uint) {
+	if len(msgs) == 0 {
+		return "", 0
+	}
+	var b strings.Builder
+	var lastID uint
+	for i := 0; i < len(msgs)-1; i++ {
+		userMsg := msgs[i]
+		assistantMsg := msgs[i+1]
+		if userMsg.Role != "user" || assistantMsg.Role != "assistant" {
+			continue
+		}
+		userText := utils.PreprocessLite(userMsg.Content)
+		assistantText := utils.PreprocessLite(assistantMsg.Content)
+		if userText == "" || assistantText == "" {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString("User: ")
+		b.WriteString(userText)
+		b.WriteString("\n")
+		b.WriteString("Assistant: ")
+		b.WriteString(assistantText)
+		lastID = assistantMsg.ID
+		i++
+	}
+	return strings.TrimSpace(b.String()), lastID
+}
+
+func stripParenthetical(text string) string {
+	if text == "" {
+		return text
+	}
+	// Remove full-width and half-width parenthetical content.
+	re := regexp.MustCompile(`\([^)]*\)|（[^）]*）`)
+	return strings.TrimSpace(re.ReplaceAllString(text, ""))
+}
 
 // extractAndStoreMemories 提取并存储记忆
 func (o *orchestrator) extractAndStoreMemories(
@@ -792,8 +785,3 @@ func (o *orchestrator) shouldExtractConservative(userText, assistantText string)
 
 	return false
 }
-
-
-
-
-

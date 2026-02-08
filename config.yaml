@@ -26,10 +26,14 @@ llm:
     #chat_model: huihui_ai/deepseek-r1-abliterated:14b
     #chat_model: DeepSeekR1Mix:1.5B
     #chat_model: gemma_writer:9B  #这个模型不太愿意聊18
-    #chat_model: Llama3.2-U:24B
-    chat_model: Claude-XU:12B #最听话的LLM 
-    temperature: 0.2              # 温度参数 (0.0-2.0)，越高越随机，越低越确定
-    repetition_penalty: 2       # 重复惩罚 (0.0-2.0)，越高越避免重复
+    #chat_model: Llama3.2U:24B
+    #chat_model: Mistral-Nemo-MixU:12b
+    #chat_model: L3Darkest:16b
+    chat_model: GPT-I-U:20b
+    #chat_model: DeepSeek-C-U:7b
+    #chat_model: Claude-XU:12B #最听话的LLM 
+    temperature: 0.8            # 温度参数 (0.0-2.0)，越高越随机，越低越确定
+    repetition_penalty: 1.2      # 重复惩罚 (0.0-2.0)，越高越避免重复
 
 
   # DeepSeek 配置
@@ -52,7 +56,7 @@ embedding:
 extractor:
   provider: ollama  # 提取器提供商: ollama, deepseek, custom（留空则使用主 LLM）
   base_url: http://127.0.0.1:11434 # 提取器服务地址
-  model: Claude-XU:12B   # 提取器模型（留空则使用主 chat_model）
+  model: DeepSeek-C-U:7b   # 提取器模型（留空则使用主 chat_model）
   #api_key: "sk-b42fde7257a649ac82b53c118d463dba"  # API Key（如果需要）
   # 提取器特定配置
   temperature: 0.1  # 温度（提取任务建议低温度）
@@ -63,7 +67,7 @@ classifier:
   provider: ollama  # 分类器提供商: ollama, deepseek, custom
   base_url: http://127.0.0.1:11434  # 分类器服务地址
   #model: Llama3.3-Uncensored:8b   # 分类器模型（建议使用小模型）
-  model: Claude-XU:12B
+  model: DeepSeek-C-U:7b
   api_key: ""  # API Key（如果需要）
   # 分类器特定配置
   temperature: 0.0  # 温度（分类任务建议 0 温度）
@@ -101,8 +105,8 @@ services:
 # 记忆配置
 memory:
   window_size: 8            # 短期记忆窗口大小（对话轮数）
-  enable_extractor: true    # 启用记忆提取器（写入长期记忆）
-  enable_smart_trigger: true  # 启用智能触发（节省 70-80% token）
+  enable_extractor: false    # 启用记忆提取器（写入长期记忆）
+  enable_smart_trigger: false  # 启用智能触发（节省 70-80% token）
   trigger_method: llm  # 触发方法: keyword, llm, conservative
   min_message_length: 10      # 最小消息长度
   include_history_context: false  # 提取时包含历史上下文（false 避免重复提取）
@@ -112,7 +116,7 @@ memory:
 
 # 知识库智能路由配置
 knowledge:
-  enable_routing: true  # 启用智能路由（使用小模型判断是否需要检索知识库）
+  enable_routing: false  # 启用智能路由（使用小模型判断是否需要检索知识库）
   top_k: 3              # 知识库检索返回的最大结果数
   min_score: 0.63      # 最小相似度分数（0-1），低于此分数的知识库文档将被过滤
 

@@ -38,9 +38,11 @@ func (m *WindowMemory) Add(user, assistant string) {
 func (m *WindowMemory) String() string {
 	var b strings.Builder
 	for i, t := range m.Turns {
-		b.WriteString(fmt.Sprintf("[TURN %d]\n", i+1))
-		b.WriteString(fmt.Sprintf("[USER]\n%s\n", t.User))
-		b.WriteString(fmt.Sprintf("[ASSISTANT]\n%s\n", t.Assistant))
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(fmt.Sprintf("User: %s\n", t.User))
+		b.WriteString(fmt.Sprintf("Assistant: %s\n", t.Assistant))
 	}
 	return b.String()
 }

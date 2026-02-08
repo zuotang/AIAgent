@@ -302,7 +302,8 @@ func runConversationLoop(ctx context.Context, orch orchestrator.Orchestrator, cf
 		}
 
 		// 处理消息
-		output, err := orch.ProcessMessage(ctx, uid, 1, userText, windowMem.String(), systemPrompt)
+		conversationMessages := windowMessages(windowMem)
+		output, err := orch.ProcessMessage(ctx, uid, 1, userText, windowMem.String(), conversationMessages, systemPrompt)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -310,6 +311,24 @@ func runConversationLoop(ctx context.Context, orch orchestrator.Orchestrator, cf
 		// 更新短期记忆
 		windowMem.Add(userText, output.Response)
 	}
+}
+
+func windowMessages(windowMem *memory.WindowMemory) []models.ChatMessage {
+	if windowMem == nil || windowMem.Size() == 0 {
+		return nil
+	}
+	msgs := make([]models.ChatMessage, 0, windowMem.Size()*2)
+	for _, t := range windowMem.Turns {
+		userText := strings.TrimSpace(t.User)
+		assistantText := strings.TrimSpace(t.Assistant)
+		if userText != "" {
+			msgs = append(msgs, models.ChatMessage{Role: "user", Content: userText})
+		}
+		if assistantText != "" {
+			msgs = append(msgs, models.ChatMessage{Role: "assistant", Content: assistantText})
+		}
+	}
+	return msgs
 }
 
 // showMemoryStats 显示记忆访问统计

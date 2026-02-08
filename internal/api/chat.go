@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 
 	"agent-langchain/internal/memory"
 	"agent-langchain/internal/orchestrator"
+	"agent-langchain/internal/models"
+	"agent-langchain/internal/utils"
 )
 
 // ChatService 聊天服务
@@ -138,54 +141,27 @@ func (s *ChatService) HandleChat(c echo.Context) error {
 		})
 	}
 
-	// 创建短期记忆窗口并加载历史消息
-	windowMem := memory.NewWindowMemory(10) // 最多保留10轮对话
+	// 加载历史消息作为上下文
 	println("加载历史聊天记录作为上下文")
 
-	// 检查是否有压缩上下文
-	compressedCtx, err := s.orch.GetStore().GetCompressedContext(c.Request().Context(), userID, agentID)
-	var historyMessages []memory.ChatMessage
-
-	if err == nil && compressedCtx.LastMessageID > 0 {
-		// 有压缩上下文，只加载新消息
-		println("发现压缩上下文，LastMessageID:", compressedCtx.LastMessageID)
-		historyMessages, err = s.orch.GetChatHistoryAfterID(c.Request().Context(), userID, agentID, compressedCtx.LastMessageID, 20)
-		if err != nil {
-			println("Failed to load chat history after ID:", err.Error())
-		}
-	} else {
-		// 没有压缩上下文，加载所有历史消息
-		println("没有压缩上下文，加载所有历史消息")
-		historyMessages, err = s.orch.GetChatHistory(c.Request().Context(), userID, agentID, 20, 0)
-		if err != nil {
-			println("Failed to load chat history:", err.Error())
-		}
+	// 直接加载历史消息（不使用压缩上下文）
+	historyMessages, err := s.orch.GetChatHistory(c.Request().Context(), userID, agentID, 200, 0)
+	if err != nil {
+		println("Failed to load chat history:", err.Error())
 	}
 
-	// 将历史消息按时间正序排列（数据库返回的是倒序）
-	if len(historyMessages) > 0 {
-		for i := len(historyMessages) - 1; i >= 0; i-- {
-			msg := historyMessages[i]
-			// 找到成对的 user 和 assistant 消息
-			if i > 0 && msg.Role == "user" && historyMessages[i-1].Role == "assistant" {
-				windowMem.Add(msg.Content, historyMessages[i-1].Content)
-				i-- // 跳过已处理的 assistant 消息
-			}
-		}
-		println("已加载", windowMem.Size(), "轮历史对话")
+	conversationMessagesAll := buildConversationMessages(historyMessages)
+	conversationMessages := takeLastTurns(conversationMessagesAll, 20)
+	conversationContext := conversationTextFromMessages(conversationMessages)
+	if conversationContext != "" {
+		println("已加载历史对话，长度:", len(conversationContext))
 	}
-
-	// 仅使用历史对话作为上下文，当前用户消息单独走 Message 字段
-	conversationContext := windowMem.String()
 
 	// 处理消息
-	output, err := s.orch.ProcessMessage(context.Background(), userID, agentID, req.Message, conversationContext, prompt)
+	output, err := s.orch.ProcessMessage(context.Background(), userID, agentID, req.Message, conversationContext, conversationMessages, prompt)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to process message: " + err.Error()})
 	}
-	println("更新短期记忆")
-	// 更新短期记忆
-	windowMem.Add(req.Message, output.Response)
 
 	return c.JSON(http.StatusOK, ChatResponse{
 		Response: output.Response,
@@ -268,42 +244,16 @@ func (s *ChatService) HandleChatStream(c echo.Context) error {
 
 	// 加载历史消息作为上下文
 	println("加载历史聊天记录作为上下文")
-	windowMem := memory.NewWindowMemory(10)
 
-	// 检查是否有压缩上下文
-	compressedCtx, err := s.orch.GetStore().GetCompressedContext(c.Request().Context(), userID, agentID)
-	var historyMessages []memory.ChatMessage
-
-	if err == nil && compressedCtx.LastMessageID > 0 {
-		// 有压缩上下文，只加载新消息
-		println("发现压缩上下文，LastMessageID:", compressedCtx.LastMessageID)
-		historyMessages, err = s.orch.GetChatHistoryAfterID(c.Request().Context(), userID, agentID, compressedCtx.LastMessageID, 20)
-		if err != nil {
-			println("Failed to load chat history after ID:", err.Error())
-		}
-	} else {
-		// 没有压缩上下文，加载所有历史消息
-		println("没有压缩上下文，加载所有历史消息")
-		historyMessages, err = s.orch.GetChatHistory(c.Request().Context(), userID, agentID, 20, 0)
-		if err != nil {
-			println("Failed to load chat history:", err.Error())
-		}
+	// 直接加载历史消息（不使用压缩上下文）
+	historyMessages, err := s.orch.GetChatHistory(c.Request().Context(), userID, agentID, 200, 0)
+	if err != nil {
+		println("Failed to load chat history:", err.Error())
 	}
 
-	// 将历史消息按时间正序排列并填充到窗口记忆
-	if len(historyMessages) > 0 {
-		for i := len(historyMessages) - 1; i >= 0; i-- {
-			msg := historyMessages[i]
-			if i > 0 && msg.Role == "user" && historyMessages[i-1].Role == "assistant" {
-				windowMem.Add(msg.Content, historyMessages[i-1].Content)
-				i--
-			}
-		}
-		println("已加载", windowMem.Size(), "轮历史对话")
-	}
-
-	// 仅使用历史对话作为上下文，当前用户消息单独走 Message 字段
-	conversationContext := windowMem.String()
+	conversationMessagesAll := buildConversationMessages(historyMessages)
+	conversationMessages := takeLastTurns(conversationMessagesAll, 20)
+	conversationContext := conversationTextFromMessages(conversationMessages)
 	println("上下文:", conversationContext)
 	println("流式回调")
 	// 流式回调
@@ -320,7 +270,7 @@ func (s *ChatService) HandleChatStream(c echo.Context) error {
 	println("处理消息")
 	// 处理消息（流式）
 	println(c.Request().Context())
-	_, err = s.orch.ProcessMessageStream(c.Request().Context(), userID, agentID, req.Message, conversationContext, prompt, streamCallback)
+	_, err = s.orch.ProcessMessageStream(c.Request().Context(), userID, agentID, req.Message, conversationContext, conversationMessages, prompt, streamCallback)
 	if err != nil {
 		println("处理消息失败")
 		println(err.Error())
@@ -336,6 +286,73 @@ func (s *ChatService) HandleChatStream(c echo.Context) error {
 	}
 
 	return nil
+}
+
+func buildConversationMessages(historyMessages []memory.ChatMessage) []models.ChatMessage {
+	if len(historyMessages) == 0 {
+		return nil
+	}
+
+	msgs := make([]models.ChatMessage, 0, len(historyMessages))
+
+	for i := len(historyMessages) - 1; i >= 0; i-- {
+		msg := historyMessages[i]
+		if i > 0 && msg.Role == "user" && historyMessages[i-1].Role == "assistant" {
+			userText := utils.PreprocessLite(msg.Content)
+			assistantText := utils.PreprocessLite(historyMessages[i-1].Content)
+
+			if userText == "" || assistantText == "" {
+				i--
+				continue
+			}
+
+			msgs = append(msgs,
+				models.ChatMessage{Role: "user", Content: userText},
+				models.ChatMessage{Role: "assistant", Content: assistantText},
+			)
+
+			i--
+		}
+	}
+
+	return msgs
+}
+
+func takeLastTurns(msgs []models.ChatMessage, turns int) []models.ChatMessage {
+	if turns <= 0 || len(msgs) == 0 {
+		return nil
+	}
+	limit := turns * 2
+	if len(msgs) <= limit {
+		return msgs
+	}
+	return msgs[len(msgs)-limit:]
+}
+
+func conversationTextFromMessages(msgs []models.ChatMessage) string {
+	if len(msgs) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i := 0; i < len(msgs); i += 2 {
+		if i+1 >= len(msgs) {
+			break
+		}
+		userText := strings.TrimSpace(msgs[i].Content)
+		assistantText := strings.TrimSpace(msgs[i+1].Content)
+		if userText == "" || assistantText == "" {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString("User: ")
+		b.WriteString(userText)
+		b.WriteString("\n")
+		b.WriteString("Assistant: ")
+		b.WriteString(assistantText)
+	}
+	return strings.TrimSpace(b.String())
 }
 
 // GetChatHistoryRequest 获取聊天记录请求

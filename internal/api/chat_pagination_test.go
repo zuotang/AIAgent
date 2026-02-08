@@ -10,6 +10,7 @@ import (
 	"agent-langchain/internal/agent"
 	"agent-langchain/internal/config"
 	"agent-langchain/internal/memory"
+	"agent-langchain/internal/models"
 	"agent-langchain/internal/rag"
 
 	"github.com/labstack/echo/v4"
@@ -40,10 +41,10 @@ func (m *MockOrchestrator) GetChatHistoryCount(ctx context.Context, userID strin
 }
 
 // 实现其他必需的接口方法（空实现）
-func (m *MockOrchestrator) ProcessMessage(ctx context.Context, userID string, agentID uint, userText string, conversationHistory string, systemPrompt string) (agent.Output, error) {
+func (m *MockOrchestrator) ProcessMessage(ctx context.Context, userID string, agentID uint, userText string, conversationHistory string, conversationMessages []models.ChatMessage, systemPrompt string) (agent.Output, error) {
 	return agent.Output{}, nil
 }
-func (m *MockOrchestrator) ProcessMessageStream(ctx context.Context, userID string, agentID uint, userText string, conversationHistory string, systemPrompt string, callback func(string) error) (agent.Output, error) {
+func (m *MockOrchestrator) ProcessMessageStream(ctx context.Context, userID string, agentID uint, userText string, conversationHistory string, conversationMessages []models.ChatMessage, systemPrompt string, callback func(string) error) (agent.Output, error) {
 	return agent.Output{}, nil
 }
 func (m *MockOrchestrator) GetConfig() *config.Config { return nil }

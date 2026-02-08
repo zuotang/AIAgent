@@ -347,6 +347,26 @@ func (s *Store) GetChatHistoryAfterID(ctx context.Context, userID string, agentI
 	return messages, err
 }
 
+// GetChatHistoryBetweenIDs 获取指定区间内的聊天记录（按ID升序）
+// afterID: 只返回ID > afterID
+// beforeID: 只返回ID < beforeID（beforeID=0表示不限制上界）
+func (s *Store) GetChatHistoryBetweenIDs(ctx context.Context, userID string, agentID uint, afterID uint, beforeID uint, limit int) ([]ChatMessage, error) {
+	var messages []ChatMessage
+
+	query := s.db.WithContext(ctx).
+		Where("user_id = ? AND agent_id = ? AND id > ?", userID, agentID, afterID)
+	if beforeID > 0 {
+		query = query.Where("id < ?", beforeID)
+	}
+
+	err := query.
+		Order("id ASC").
+		Limit(limit).
+		Find(&messages).Error
+
+	return messages, err
+}
+
 // GetChatSessions 获取用户的聊天会话列表
 func (s *Store) GetChatSessions(ctx context.Context, userID string, agentID uint) ([]ChatSession, error) {
 	var sessions []ChatSession

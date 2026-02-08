@@ -105,7 +105,7 @@ func (o *orchestrator) retrieveBoth(
 	return contextResult
 }
 
-// retrieveMemoryOnly 只检索记忆
+// retrieveMemoryOnly 只检索记忆（异步）
 func (o *orchestrator) retrieveMemoryOnly(
 	ctx context.Context,
 	userID string,
@@ -114,15 +114,32 @@ func (o *orchestrator) retrieveMemoryOnly(
 ) *ContextResult {
 	contextResult := &ContextResult{}
 
-	structured, semantic, err := o.retrieveMemories(ctx, userID, agentID, userText)
-	if err != nil {
+	// 使用goroutine异步检索记忆
+	resultCh := make(chan struct {
+		structured string
+		semantic   []rag.Doc
+		err        error
+	}, 1)
+
+	go func() {
+		structured, semantic, err := o.retrieveMemories(ctx, userID, agentID, userText)
+		resultCh <- struct {
+			structured string
+			semantic   []rag.Doc
+			err        error
+		}{structured, semantic, err}
+	}()
+
+	// 等待检索完成
+	result := <-resultCh
+	if result.err != nil {
 		if o.config.Base.Debug {
-			log.Printf("[DEBUG] 记忆检索失败: %v", err)
+			log.Printf("[DEBUG] 记忆检索失败: %v", result.err)
 		}
 	} else {
-		contextResult.StructuredText = structured
-		contextResult.SemanticDocs = semantic
-		contextResult.MemoryText = o.formatMemories(structured, semantic)
+		contextResult.StructuredText = result.structured
+		contextResult.SemanticDocs = result.semantic
+		contextResult.MemoryText = o.formatMemories(result.structured, result.semantic)
 		if o.config.Base.Debug {
 			log.Printf("[DEBUG] 记忆已加载")
 		}
@@ -131,7 +148,7 @@ func (o *orchestrator) retrieveMemoryOnly(
 	return contextResult
 }
 
-// retrieveKnowledgeOnly 只检索知识库
+// retrieveKnowledgeOnly 只检索知识库（异步）
 func (o *orchestrator) retrieveKnowledgeOnly(
 	ctx context.Context,
 	userID string,
@@ -140,17 +157,32 @@ func (o *orchestrator) retrieveKnowledgeOnly(
 ) *ContextResult {
 	contextResult := &ContextResult{}
 
-	knowledge, err := o.retrieveKnowledge(ctx, userID, agentID, userText)
-	if err != nil {
+	// 使用goroutine异步检索知识库
+	resultCh := make(chan struct {
+		knowledge []rag.Doc
+		err       error
+	}, 1)
+
+	go func() {
+		knowledge, err := o.retrieveKnowledge(ctx, userID, agentID, userText)
+		resultCh <- struct {
+			knowledge []rag.Doc
+			err       error
+		}{knowledge, err}
+	}()
+
+	// 等待检索完成
+	result := <-resultCh
+	if result.err != nil {
 		if o.config.Base.Debug {
-			log.Printf("[DEBUG] 知识库检索失败: %v", err)
+			log.Printf("[DEBUG] 知识库检索失败: %v", result.err)
 		}
 	} else {
-		contextResult.KnowledgeDocs = knowledge
-		contextResult.KnowledgeText = o.formatKnowledge(knowledge)
+		contextResult.KnowledgeDocs = result.knowledge
+		contextResult.KnowledgeText = o.formatKnowledge(result.knowledge)
 		if o.config.Base.Debug {
-			if len(knowledge) > 0 {
-				log.Printf("[DEBUG] 知识库已加载 (%d 条文档)", len(knowledge))
+			if len(result.knowledge) > 0 {
+				log.Printf("[DEBUG] 知识库已加载 (%d 条文档)", len(result.knowledge))
 			} else {
 				log.Printf("[DEBUG] 知识库检索完成，但所有文档都被过滤（相似度低于阈值 %.2f）", o.config.Knowledge.MinScore)
 			}
