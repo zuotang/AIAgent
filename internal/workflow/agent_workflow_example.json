@@ -1,0 +1,102 @@
+{
+  "version": "1.0",
+  "meta": {
+    "id": "multi-agent-001",
+    "name": "Multi-Agent Content Creation Workflow",
+    "description": "使用多个 Agent 协作创建和审核内容"
+  },
+  "nodes": {
+    "input": {
+      "id": "input",
+      "type": "Input.Text",
+      "version": "1.0",
+      "params": {
+        "text": "写一篇关于人工智能在医疗领域应用的文章"
+      }
+    },
+    "writer_agent": {
+      "id": "writer_agent",
+      "type": "Agent.Create",
+      "version": "1.0",
+      "params": {
+        "prompt": "你是一位专业的科技作家，擅长撰写关于人工智能和技术创新的文章。你的写作风格清晰、引人入胜，善于用通俗易懂的语言解释复杂的技术概念。请根据用户的要求创作内容。",
+        "provider": "ollama",
+        "model": "qwen3:4b",
+        "temperature": 0.8
+      }
+    },
+    "editor_agent": {
+      "id": "editor_agent",
+      "type": "Agent.Create",
+      "version": "1.0",
+      "params": {
+        "prompt": "你是一位严谨的编辑，负责审核和改进文章。你会检查文章的逻辑性、准确性、可读性，并提出具体的改进建议。请对提供的文章进行审核，指出问题并给出改进后的版本。",
+        "provider": "ollama",
+        "model": "qwen3:4b",
+        "temperature": 0.3
+      }
+    },
+    "write": {
+      "id": "write",
+      "type": "Agent.Chat",
+      "version": "1.0",
+      "params": {}
+    },
+    "review": {
+      "id": "review",
+      "type": "Agent.Chat",
+      "version": "1.0",
+      "params": {}
+    },
+    "to_text": {
+      "id": "to_text",
+      "type": "Transform.MessagesToText",
+      "version": "1.0",
+      "params": {}
+    },
+    "output": {
+      "id": "output",
+      "type": "Output.Text",
+      "version": "1.0",
+      "params": {}
+    }
+  },
+  "edges": [
+    {
+      "id": "e1",
+      "from": {"node": "input", "port": "text"},
+      "to": {"node": "write", "port": "text"},
+      "type": "data"
+    },
+    {
+      "id": "e2",
+      "from": {"node": "writer_agent", "port": "agent"},
+      "to": {"node": "write", "port": "agent"},
+      "type": "data"
+    },
+    {
+      "id": "e3",
+      "from": {"node": "write", "port": "messages"},
+      "to": {"node": "review", "port": "text"},
+      "type": "data"
+    },
+    {
+      "id": "e4",
+      "from": {"node": "editor_agent", "port": "agent"},
+      "to": {"node": "review", "port": "agent"},
+      "type": "data"
+    },
+    {
+      "id": "e5",
+      "from": {"node": "review", "port": "messages"},
+      "to": {"node": "to_text", "port": "messages"},
+      "type": "data"
+    },
+    {
+      "id": "e6",
+      "from": {"node": "to_text", "port": "text"},
+      "to": {"node": "output", "port": "text"},
+      "type": "data"
+    }
+  ]
+}

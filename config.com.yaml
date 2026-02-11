@@ -4,7 +4,7 @@
 base:
   provider: deepseek  # 主 LLM 提供商: ollama 或 deepseek
   debug: true      # 调试模式
-  timeout: 60       # 超时时间（秒）
+  timeout: 600       # 超时时间（秒）
 
 # LLM 配置（用于主对话）
 llm:

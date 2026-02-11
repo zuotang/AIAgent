@@ -1,6 +1,7 @@
 package nodes
 
 import (
+	"agent-langchain/internal/workflow/nodes/agent"
 	"agent-langchain/internal/workflow/nodes/context"
 	"agent-langchain/internal/workflow/nodes/embedding"
 	"agent-langchain/internal/workflow/nodes/io"
@@ -19,6 +20,14 @@ import (
 
 // RegisterBuiltinNodes 注册所有内置节点
 func RegisterBuiltinNodes(reg *registry.Registry) error {
+	// Agent 节点
+	if err := reg.Register((&agent.CreateNode{}).Spec()); err != nil {
+		return err
+	}
+	if err := reg.Register((&agent.ChatNode{}).Spec()); err != nil {
+		return err
+	}
+
 	// LLM 节点 - 原有节点
 	if err := reg.Register((&llm.GenerateNode{}).Spec()); err != nil {
 		return err

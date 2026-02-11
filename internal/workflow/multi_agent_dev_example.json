@@ -1,0 +1,47 @@
+{
+  "version": "1.0",
+  "meta": {
+    "id": "multi-agent-dev-001",
+    "name": "Multi-Agent Video Page Development",
+    "description": "多 Agent 协作开发视频页面"
+  },
+  "nodes": {
+    "node-1": {"id": "node-1", "type": "Input.Text", "version": "1.0", "params": {"text": "开发一个视频播放页面，需要包含视频播放器、播放控制按钮、进度条、音量控制和全屏功能"}},
+    "node-2": {"id": "node-2", "type": "Agent.Create", "version": "1.0", "params": {"prompt": "你是项目经理，负责分析需求并制定开发计划。请将需求分解为具体的开发任务，包括：1) HTML结构设计 2) CSS样式设计 3) JavaScript交互开发。对每个任务给出清晰的要求和验收标准。", "provider": "ollama", "model": "qwen3:4b", "temperature": 0.3}},
+    "node-3": {"id": "node-3", "type": "Agent.Chat", "version": "1.0", "params": {}},
+    "node-4": {"id": "node-4", "type": "Agent.Create", "version": "1.0", "params": {"prompt": "你是前端架构师，专注于 HTML 结构设计。根据需求设计语义化的 HTML 结构，使用合适的标签，确保可访问性。只输出 HTML 代码，不要包含 CSS 和 JavaScript。", "provider": "ollama", "model": "qwen3:4b", "temperature": 0.5}},
+    "node-5": {"id": "node-5", "type": "Agent.Chat", "version": "1.0", "params": {}},
+    "node-6": {"id": "node-6", "type": "Agent.Create", "version": "1.0", "params": {"prompt": "你是 UI 设计师，专注于 CSS 样式设计。根据 HTML 结构设计美观、现代的样式。使用 Flexbox 或 Grid 布局，确保响应式设计。只输出 CSS 代码。", "provider": "ollama", "model": "qwen3:4b", "temperature": 0.6}},
+    "node-7": {"id": "node-7", "type": "Agent.Chat", "version": "1.0", "params": {}},
+    "node-8": {"id": "node-8", "type": "Agent.Create", "version": "1.0", "params": {"prompt": "你是交互开发工程师，专注于 JavaScript 功能实现。根据需求实现视频播放控制、进度条、音量控制等交互功能。使用原生 JavaScript，代码要清晰、有注释。只输出 JavaScript 代码。", "provider": "ollama", "model": "qwen3:4b", "temperature": 0.4}},
+    "node-9": {"id": "node-9", "type": "Agent.Chat", "version": "1.0", "params": {}},
+    "node-10": {"id": "node-10", "type": "Agent.Create", "version": "1.0", "params": {"prompt": "你是系统集成工程师，负责将 HTML、CSS 和 JavaScript 整合成完整的页面。将三部分代码合并成一个完整的 HTML 文件，确保代码格式正确、结构清晰。", "provider": "ollama", "model": "qwen3:4b", "temperature": 0.2}},
+    "node-11": {"id": "node-11", "type": "Agent.Chat", "version": "1.0", "params": {}},
+    "node-12": {"id": "node-12", "type": "Transform.MessagesToText", "version": "1.0", "params": {}},
+    "node-13": {"id": "node-13", "type": "Output.Text", "version": "1.0", "params": {}},
+    "debug-1": {"id": "debug-1", "type": "Output.Text", "version": "1.0", "params": {}},
+    "debug-2": {"id": "debug-2", "type": "Output.Text", "version": "1.0", "params": {}},
+    "debug-3": {"id": "debug-3", "type": "Output.Text", "version": "1.0", "params": {}},
+    "debug-4": {"id": "debug-4", "type": "Output.Text", "version": "1.0", "params": {}},
+    "debug-5": {"id": "debug-5", "type": "Output.Text", "version": "1.0", "params": {}}
+  },
+  "edges": [
+    {"id": "edge-1", "from": {"node": "node-1", "port": "text"}, "to": {"node": "node-3", "port": "text"}, "type": "data"},
+    {"id": "edge-2", "from": {"node": "node-2", "port": "agent"}, "to": {"node": "node-3", "port": "agent"}, "type": "data"},
+    {"id": "edge-3", "from": {"node": "node-3", "port": "text"}, "to": {"node": "node-5", "port": "text"}, "type": "data"},
+    {"id": "edge-4", "from": {"node": "node-4", "port": "agent"}, "to": {"node": "node-5", "port": "agent"}, "type": "data"},
+    {"id": "edge-5", "from": {"node": "node-5", "port": "text"}, "to": {"node": "node-7", "port": "text"}, "type": "data"},
+    {"id": "edge-6", "from": {"node": "node-6", "port": "agent"}, "to": {"node": "node-7", "port": "agent"}, "type": "data"},
+    {"id": "edge-7", "from": {"node": "node-7", "port": "text"}, "to": {"node": "node-9", "port": "text"}, "type": "data"},
+    {"id": "edge-8", "from": {"node": "node-8", "port": "agent"}, "to": {"node": "node-9", "port": "agent"}, "type": "data"},
+    {"id": "edge-9", "from": {"node": "node-9", "port": "text"}, "to": {"node": "node-11", "port": "text"}, "type": "data"},
+    {"id": "edge-10", "from": {"node": "node-10", "port": "agent"}, "to": {"node": "node-11", "port": "agent"}, "type": "data"},
+    {"id": "edge-11", "from": {"node": "node-11", "port": "messages"}, "to": {"node": "node-12", "port": "messages"}, "type": "data"},
+    {"id": "edge-12", "from": {"node": "node-12", "port": "text"}, "to": {"node": "node-13", "port": "text"}, "type": "data"},
+    {"id": "debug-edge-1", "from": {"node": "node-3", "port": "text"}, "to": {"node": "debug-1", "port": "text"}, "type": "data"},
+    {"id": "debug-edge-2", "from": {"node": "node-5", "port": "text"}, "to": {"node": "debug-2", "port": "text"}, "type": "data"},
+    {"id": "debug-edge-3", "from": {"node": "node-7", "port": "text"}, "to": {"node": "debug-3", "port": "text"}, "type": "data"},
+    {"id": "debug-edge-4", "from": {"node": "node-9", "port": "text"}, "to": {"node": "debug-4", "port": "text"}, "type": "data"},
+    {"id": "debug-edge-5", "from": {"node": "node-11", "port": "text"}, "to": {"node": "debug-5", "port": "text"}, "type": "data"}
+  ]
+}

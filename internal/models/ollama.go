@@ -49,7 +49,7 @@ func New(baseURL, chatModel, embModel string) *Client {
 		ChatModel: chatModel,
 		EmbModel:  embModel,
 		HTTP: &http.Client{
-			Timeout: 120 * time.Second,
+			Timeout: 600 * time.Second,
 		},
 	}
 }

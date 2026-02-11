@@ -189,7 +189,7 @@ func (s *WorkflowService) HandleExecuteWorkflow(c echo.Context) error {
 	rc.Cache["executor"] = s.executor
 
 	// 执行工作流
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
 	trace, err := s.executor.Execute(ctx, &req.Workflow, rc)
@@ -255,7 +255,7 @@ func (s *WorkflowService) HandleExecuteWorkflowStream(c echo.Context) error {
 	}
 	rc.Cache["executor"] = s.executor
 
-	ctx, cancel := context.WithTimeout(c.Request().Context(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(c.Request().Context(), 10*time.Minute)
 	defer cancel()
 
 	// 使用带事件回调的执行器
@@ -292,6 +292,8 @@ func (s *WorkflowService) HandleExecuteWorkflowStream(c echo.Context) error {
 
 func getCategory(nodeType string) string {
 	switch {
+	case contains(nodeType, "Agent"):
+		return "Agent"
 	case contains(nodeType, "LLM"):
 		return "LLM"
 	case contains(nodeType, "Context"):
@@ -335,6 +337,8 @@ func getName(nodeType string) string {
 
 func getDescription(nodeType string) string {
 	descriptions := map[string]string{
+		"Agent.Create":             "动态创建 LLM Agent 实例",
+		"Agent.Chat":               "使用 Agent 进行对话交互",
 		"LLM.Ollama":               "使用本地Ollama运行的开源模型",
 		"LLM.DeepSeek":             "使用DeepSeek云端API",
 		"LLM.Anthropic":            "使用Anthropic Claude API",
@@ -406,6 +410,51 @@ func getParamInfo(nodeType string) []ParamInfo {
 	params := make([]ParamInfo, 0)
 
 	switch nodeType {
+	case "Agent.Create":
+		params = append(params,
+			ParamInfo{
+				Name:        "prompt",
+				Type:        "string",
+				Required:    true,
+				Description: "系统提示词，定义 Agent 的角色和行为",
+			},
+			ParamInfo{
+				Name:        "provider",
+				Type:        "string",
+				Required:    false,
+				Default:     "ollama",
+				Description: "LLM 提供商",
+				Options:     []string{"ollama", "deepseek", "anthropic"},
+			},
+			ParamInfo{
+				Name:        "model",
+				Type:        "string",
+				Required:    false,
+				Default:     "qwen3:4b",
+				Description: "模型名称",
+			},
+			ParamInfo{
+				Name:        "base_url",
+				Type:        "string",
+				Required:    false,
+				Description: "API 基础 URL（可选）",
+			},
+			ParamInfo{
+				Name:        "api_key",
+				Type:        "string",
+				Required:    false,
+				Description: "API 密钥（DeepSeek/Anthropic 需要）",
+			},
+			ParamInfo{
+				Name:        "temperature",
+				Type:        "number",
+				Required:    false,
+				Default:     0.7,
+				Description: "温度参数，控制输出的随机性 (0-2)",
+				Min:         float64Ptr(0),
+				Max:         float64Ptr(2),
+			},
+		)
 	case "LLM.Ollama":
 		params = append(params,
 			ParamInfo{

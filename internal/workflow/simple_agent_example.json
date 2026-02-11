@@ -1,0 +1,73 @@
+{
+  "version": "1.0",
+  "meta": {
+    "id": "simple-agent-001",
+    "name": "Simple Agent Workflow",
+    "description": "简单的单 Agent 对话示例"
+  },
+  "nodes": {
+    "input": {
+      "id": "input",
+      "type": "Input.Text",
+      "version": "1.0",
+      "params": {
+        "text": "你好，请介绍一下你自己"
+      }
+    },
+    "my_agent": {
+      "id": "my_agent",
+      "type": "Agent.Create",
+      "version": "1.0",
+      "params": {
+        "prompt": "你是一个友好的AI助手，名叫小智。你擅长回答各种问题，并且总是保持礼貌和专业。",
+        "provider": "ollama",
+        "model": "qwen3:4b",
+        "temperature": 0.7
+      }
+    },
+    "chat": {
+      "id": "chat",
+      "type": "Agent.Chat",
+      "version": "1.0",
+      "params": {}
+    },
+    "to_text": {
+      "id": "to_text",
+      "type": "Transform.MessagesToText",
+      "version": "1.0",
+      "params": {}
+    },
+    "output": {
+      "id": "output",
+      "type": "Output.Text",
+      "version": "1.0",
+      "params": {}
+    }
+  },
+  "edges": [
+    {
+      "id": "e1",
+      "from": {"node": "input", "port": "text"},
+      "to": {"node": "chat", "port": "text"},
+      "type": "data"
+    },
+    {
+      "id": "e2",
+      "from": {"node": "my_agent", "port": "agent"},
+      "to": {"node": "chat", "port": "agent"},
+      "type": "data"
+    },
+    {
+      "id": "e3",
+      "from": {"node": "chat", "port": "messages"},
+      "to": {"node": "to_text", "port": "messages"},
+      "type": "data"
+    },
+    {
+      "id": "e4",
+      "from": {"node": "to_text", "port": "text"},
+      "to": {"node": "output", "port": "text"},
+      "type": "data"
+    }
+  ]
+}

@@ -1,0 +1,233 @@
+{
+  "version": "1.0",
+  "meta": {
+    "id": "customer-service-001",
+    "name": "Intelligent Customer Service Workflow",
+    "description": "智能客服系统：根据用户意图路由到不同的专业 Agent"
+  },
+  "nodes": {
+    "input": {
+      "id": "input",
+      "type": "Input.Text",
+      "version": "1.0",
+      "params": {
+        "text": "我的订单还没有发货，想查询一下物流信息"
+      }
+    },
+    "intent_classifier": {
+      "id": "intent_classifier",
+      "type": "Agent.Create",
+      "version": "1.0",
+      "params": {
+        "prompt": "你是一个意图分类专家。请分析用户的问题，判断属于以下哪一类：\n1. order - 订单相关问题（查询、修改、取消）\n2. product - 产品咨询（功能、规格、使用方法）\n3. payment - 支付问题（退款、发票、支付方式）\n4. complaint - 投诉建议\n\n请只回复类别名称，不要有其他内容。",
+        "provider": "ollama",
+        "model": "qwen3:4b",
+        "temperature": 0.1
+      }
+    },
+    "classify": {
+      "id": "classify",
+      "type": "Agent.Chat",
+      "version": "1.0",
+      "params": {}
+    },
+    "intent_switch": {
+      "id": "intent_switch",
+      "type": "Flow.Switch",
+      "version": "1.0",
+      "params": {
+        "cases": ["order", "product", "payment", "complaint"]
+      }
+    },
+    "order_agent": {
+      "id": "order_agent",
+      "type": "Agent.Create",
+      "version": "1.0",
+      "params": {
+        "prompt": "你是订单服务专员，负责处理订单查询、物流跟踪、订单修改等问题。请专业、耐心地回答用户的订单相关问题，提供详细的解决方案。",
+        "provider": "ollama",
+        "model": "qwen3:4b",
+        "temperature": 0.5
+      }
+    },
+    "product_agent": {
+      "id": "product_agent",
+      "type": "Agent.Create",
+      "version": "1.0",
+      "params": {
+        "prompt": "你是产品顾问，精通产品的功能、规格和使用方法。请详细、准确地回答用户的产品咨询问题，帮助用户更好地了解和使用产品。",
+        "provider": "ollama",
+        "model": "qwen3:4b",
+        "temperature": 0.6
+      }
+    },
+    "payment_agent": {
+      "id": "payment_agent",
+      "type": "Agent.Create",
+      "version": "1.0",
+      "params": {
+        "prompt": "你是财务客服专员，负责处理支付、退款、发票等财务相关问题。请准确、专业地回答用户的支付相关问题，确保信息的准确性。",
+        "provider": "ollama",
+        "model": "qwen3:4b",
+        "temperature": 0.3
+      }
+    },
+    "complaint_agent": {
+      "id": "complaint_agent",
+      "type": "Agent.Create",
+      "version": "1.0",
+      "params": {
+        "prompt": "你是客户关系专员，负责处理用户的投诉和建议。请以同理心倾听用户的问题，表达歉意，并提供合理的解决方案。态度要诚恳、专业。",
+        "provider": "ollama",
+        "model": "qwen3:4b",
+        "temperature": 0.7
+      }
+    },
+    "handle_order": {
+      "id": "handle_order",
+      "type": "Agent.Chat",
+      "version": "1.0",
+      "params": {}
+    },
+    "handle_product": {
+      "id": "handle_product",
+      "type": "Agent.Chat",
+      "version": "1.0",
+      "params": {}
+    },
+    "handle_payment": {
+      "id": "handle_payment",
+      "type": "Agent.Chat",
+      "version": "1.0",
+      "params": {}
+    },
+    "handle_complaint": {
+      "id": "handle_complaint",
+      "type": "Agent.Chat",
+      "version": "1.0",
+      "params": {}
+    },
+    "output": {
+      "id": "output",
+      "type": "Output.Text",
+      "version": "1.0",
+      "params": {}
+    }
+  },
+  "edges": [
+    {
+      "id": "e1",
+      "from": {"node": "input", "port": "text"},
+      "to": {"node": "classify", "port": "text"},
+      "type": "data"
+    },
+    {
+      "id": "e2",
+      "from": {"node": "intent_classifier", "port": "agent"},
+      "to": {"node": "classify", "port": "agent"},
+      "type": "data"
+    },
+    {
+      "id": "e3",
+      "from": {"node": "classify", "port": "messages"},
+      "to": {"node": "intent_switch", "port": "value"},
+      "type": "data"
+    },
+    {
+      "id": "e4",
+      "from": {"node": "intent_switch", "port": "case_0"},
+      "to": {"node": "handle_order", "port": "in"},
+      "type": "flow"
+    },
+    {
+      "id": "e5",
+      "from": {"node": "intent_switch", "port": "case_1"},
+      "to": {"node": "handle_product", "port": "in"},
+      "type": "flow"
+    },
+    {
+      "id": "e6",
+      "from": {"node": "intent_switch", "port": "case_2"},
+      "to": {"node": "handle_payment", "port": "in"},
+      "type": "flow"
+    },
+    {
+      "id": "e7",
+      "from": {"node": "intent_switch", "port": "case_3"},
+      "to": {"node": "handle_complaint", "port": "in"},
+      "type": "flow"
+    },
+    {
+      "id": "e8",
+      "from": {"node": "input", "port": "text"},
+      "to": {"node": "handle_order", "port": "text"},
+      "type": "data"
+    },
+    {
+      "id": "e9",
+      "from": {"node": "order_agent", "port": "agent"},
+      "to": {"node": "handle_order", "port": "agent"},
+      "type": "data"
+    },
+    {
+      "id": "e10",
+      "from": {"node": "input", "port": "text"},
+      "to": {"node": "handle_product", "port": "text"},
+      "type": "data"
+    },
+    {
+      "id": "e11",
+      "from": {"node": "product_agent", "port": "agent"},
+      "to": {"node": "handle_product", "port": "agent"},
+      "type": "data"
+    },
+    {
+      "id": "e12",
+      "from": {"node": "input", "port": "text"},
+      "to": {"node": "handle_payment", "port": "text"},
+      "type": "data"
+    },
+    {
+      "id": "e13",
+      "from": {"node": "payment_agent", "port": "agent"},
+      "to": {"node": "handle_payment", "port": "agent"},
+      "type": "data"
+    },
+    {
+      "id": "e14",
+      "from": {"node": "input", "port": "text"},
+      "to": {"node": "handle_complaint", "port": "text"},
+      "type": "data"
+    },
+    {
+      "id": "e15",
+      "from": {"node": "complaint_agent", "port": "agent"},
+      "to": {"node": "handle_complaint", "port": "agent"},
+      "type": "data"
+    },
+    {
+      "id": "e16",
+      "from": {"node": "handle_order", "port": "messages"},
+      "to": {"node": "output", "port": "text"},
+      "type": "data"
+    },
+    {
+      "id": "e17",
+      "from": {"node": "handle_product", "port": "messages"},
+      "to": {"node": "output", "port": "text"},
+      "type": "data"
+    },
+    {
+      "id": "e18",
+      "from": {"node": "handle_payment", "port": "messages"},
+      "to": {"node": "output", "port": "text"},
+      "type": "data"
+    },
+    {
+      "id": "e19",
+      "from": {"node": "handle_complaint", "port": "messages"},
+      "to": {"node": "output", "port": "text"},
+      "type": "data"
+    }
+  ]
+}

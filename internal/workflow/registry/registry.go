@@ -28,6 +28,11 @@ type NodeSpec struct {
 	Runner  NodeRunner        `json:"-"`       // 节点运行器（不序列化）
 }
 
+// WorkflowExecutor 工作流执行器接口（避免循环依赖）
+type WorkflowExecutor interface {
+	Execute(ctx context.Context, wf interface{}, rc *RunContext) (interface{}, error)
+}
+
 // RunContext 运行时上下文，包含所有外部依赖
 type RunContext struct {
 	// LLM 客户端
@@ -60,6 +65,9 @@ type RunContext struct {
 		// 这里定义 Tool 接口方法
 		// TODO: 根据实际 tools 接口定义
 	}
+
+	// Workflow 执行器（用于 Workflow.Call 节点）
+	WorkflowExecutor WorkflowExecutor
 
 	// 缓存（可选）
 	Cache map[string]any

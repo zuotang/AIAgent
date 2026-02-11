@@ -1,0 +1,73 @@
+{
+  "version": "1.0",
+  "meta": {
+    "id": "customer-service-simple-001",
+    "name": "Simple Customer Service Workflow",
+    "description": "简化的客服系统示例"
+  },
+  "nodes": {
+    "input": {
+      "id": "input",
+      "type": "Input.Text",
+      "version": "1.0",
+      "params": {
+        "text": "我的订单还没有发货，想查询一下物流信息"
+      }
+    },
+    "service_agent": {
+      "id": "service_agent",
+      "type": "Agent.Create",
+      "version": "1.0",
+      "params": {
+        "prompt": "你是一个专业的客服人员，负责处理用户的各种问题，包括订单查询、产品咨询、支付问题和投诉建议。请专业、耐心地回答用户的问题。",
+        "provider": "ollama",
+        "model": "qwen3:4b",
+        "temperature": 0.6
+      }
+    },
+    "chat": {
+      "id": "chat",
+      "type": "Agent.Chat",
+      "version": "1.0",
+      "params": {}
+    },
+    "to_text": {
+      "id": "to_text",
+      "type": "Transform.MessagesToText",
+      "version": "1.0",
+      "params": {}
+    },
+    "output": {
+      "id": "output",
+      "type": "Output.Text",
+      "version": "1.0",
+      "params": {}
+    }
+  },
+  "edges": [
+    {
+      "id": "e1",
+      "from": {"node": "input", "port": "text"},
+      "to": {"node": "chat", "port": "text"},
+      "type": "data"
+    },
+    {
+      "id": "e2",
+      "from": {"node": "service_agent", "port": "agent"},
+      "to": {"node": "chat", "port": "agent"},
+      "type": "data"
+    },
+    {
+      "id": "e3",
+      "from": {"node": "chat", "port": "messages"},
+      "to": {"node": "to_text", "port": "messages"},
+      "type": "data"
+    },
+    {
+      "id": "e4",
+      "from": {"node": "to_text", "port": "text"},
+      "to": {"node": "output", "port": "text"},
+      "type": "data"
+    }
+  ]
+}

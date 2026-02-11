@@ -33,7 +33,7 @@ func NewDeepSeek(baseURL, apiKey, chatModel string) *DeepSeekClient {
 		APIKey:    apiKey,
 		ChatModel: chatModel,
 		HTTP: &http.Client{
-			Timeout: 120 * time.Second,
+			Timeout: 600 * time.Second,
 		},
 	}
 }

@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"agent-langchain/internal/workflow/dsl"
-	"agent-langchain/internal/workflow/engine"
 	"agent-langchain/internal/workflow/registry"
 	"agent-langchain/internal/workflow/types"
 )
@@ -42,26 +41,21 @@ func (n *CallNode) Run(ctx context.Context, rc *registry.RunContext, inputs map[
 		}
 	}
 
-	var exec *engine.Executor
-	if rc.Cache != nil {
-		if v, ok := rc.Cache["executor"]; ok {
-			exec, _ = v.(*engine.Executor)
-		}
-	}
-	if exec == nil {
-		return nil, fmt.Errorf("executor not found in run context cache")
+	if rc.WorkflowExecutor == nil {
+		return nil, fmt.Errorf("workflow executor not found in run context")
 	}
 
 	subRc := &registry.RunContext{
-		LLMClient:    rc.LLMClient,
-		EmbedClient:  rc.EmbedClient,
-		MemoryStore:  rc.MemoryStore,
-		QdrantClient: rc.QdrantClient,
-		ToolRegistry: rc.ToolRegistry,
-		Cache:        make(map[string]any),
+		LLMClient:        rc.LLMClient,
+		EmbedClient:      rc.EmbedClient,
+		MemoryStore:      rc.MemoryStore,
+		QdrantClient:     rc.QdrantClient,
+		ToolRegistry:     rc.ToolRegistry,
+		WorkflowExecutor: rc.WorkflowExecutor,
+		Cache:            make(map[string]any),
 	}
 
-	trace, err := exec.Execute(ctx, wf, subRc)
+	trace, err := rc.WorkflowExecutor.Execute(ctx, wf, subRc)
 	if err != nil {
 		return nil, err
 	}

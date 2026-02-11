@@ -1,0 +1,173 @@
+{
+  "version": "1.0",
+  "meta": {
+    "id": "parallel-agents-001",
+    "name": "Parallel Translation Comparison",
+    "description": "使用多个翻译 Agent 并行工作，对比不同的翻译结果"
+  },
+  "nodes": {
+    "input": {
+      "id": "input",
+      "type": "Input.Text",
+      "version": "1.0",
+      "params": {
+        "text": "The rapid advancement of artificial intelligence is transforming industries worldwide, from healthcare to finance, creating both opportunities and challenges for society."
+      }
+    },
+    "translator_formal": {
+      "id": "translator_formal",
+      "type": "Agent.Create",
+      "version": "1.0",
+      "params": {
+        "prompt": "你是一位专业的翻译专家，擅长正式、学术风格的翻译。请将英文翻译成中文，保持专业和正式的语气。",
+        "provider": "ollama",
+        "model": "qwen3:4b",
+        "temperature": 0.3
+      }
+    },
+    "translator_casual": {
+      "id": "translator_casual",
+      "type": "Agent.Create",
+      "version": "1.0",
+      "params": {
+        "prompt": "你是一位翻译专家，擅长通俗易懂、口语化的翻译。请将英文翻译成中文，使用日常口语的表达方式。",
+        "provider": "ollama",
+        "model": "qwen3:4b",
+        "temperature": 0.7
+      }
+    },
+    "translator_literary": {
+      "id": "translator_literary",
+      "type": "Agent.Create",
+      "version": "1.0",
+      "params": {
+        "prompt": "你是一位文学翻译家，擅长优美、富有文采的翻译。请将英文翻译成中文，使用优雅的文学表达。",
+        "provider": "ollama",
+        "model": "qwen3:4b",
+        "temperature": 0.9
+      }
+    },
+    "translate_formal": {
+      "id": "translate_formal",
+      "type": "Agent.Chat",
+      "version": "1.0",
+      "params": {}
+    },
+    "translate_casual": {
+      "id": "translate_casual",
+      "type": "Agent.Chat",
+      "version": "1.0",
+      "params": {}
+    },
+    "translate_literary": {
+      "id": "translate_literary",
+      "type": "Agent.Chat",
+      "version": "1.0",
+      "params": {}
+    },
+    "format_formal": {
+      "id": "format_formal",
+      "type": "Transform.TextToJSON",
+      "version": "1.0",
+      "params": {
+        "key": "formal_translation"
+      }
+    },
+    "format_casual": {
+      "id": "format_casual",
+      "type": "Transform.TextToJSON",
+      "version": "1.0",
+      "params": {
+        "key": "casual_translation"
+      }
+    },
+    "format_literary": {
+      "id": "format_literary",
+      "type": "Transform.TextToJSON",
+      "version": "1.0",
+      "params": {
+        "key": "literary_translation"
+      }
+    },
+    "output": {
+      "id": "output",
+      "type": "Output.JSON",
+      "version": "1.0",
+      "params": {}
+    }
+  },
+  "edges": [
+    {
+      "id": "e1",
+      "from": {"node": "input", "port": "text"},
+      "to": {"node": "translate_formal", "port": "text"},
+      "type": "data"
+    },
+    {
+      "id": "e2",
+      "from": {"node": "translator_formal", "port": "agent"},
+      "to": {"node": "translate_formal", "port": "agent"},
+      "type": "data"
+    },
+    {
+      "id": "e3",
+      "from": {"node": "input", "port": "text"},
+      "to": {"node": "translate_casual", "port": "text"},
+      "type": "data"
+    },
+    {
+      "id": "e4",
+      "from": {"node": "translator_casual", "port": "agent"},
+      "to": {"node": "translate_casual", "port": "agent"},
+      "type": "data"
+    },
+    {
+      "id": "e5",
+      "from": {"node": "input", "port": "text"},
+      "to": {"node": "translate_literary", "port": "text"},
+      "type": "data"
+    },
+    {
+      "id": "e6",
+      "from": {"node": "translator_literary", "port": "agent"},
+      "to": {"node": "translate_literary", "port": "agent"},
+      "type": "data"
+    },
+    {
+      "id": "e7",
+      "from": {"node": "translate_formal", "port": "messages"},
+      "to": {"node": "format_formal", "port": "text"},
+      "type": "data"
+    },
+    {
+      "id": "e8",
+      "from": {"node": "translate_casual", "port": "messages"},
+      "to": {"node": "format_casual", "port": "text"},
+      "type": "data"
+    },
+    {
+      "id": "e9",
+      "from": {"node": "translate_literary", "port": "messages"},
+      "to": {"node": "format_literary", "port": "text"},
+      "type": "data"
+    },
+    {
+      "id": "e10",
+      "from": {"node": "format_formal", "port": "json"},
+      "to": {"node": "output", "port": "json"},
+      "type": "data"
+    },
+    {
+      "id": "e11",
+      "from": {"node": "format_casual", "port": "json"},
+      "to": {"node": "output", "port": "json"},
+      "type": "data"
+    },
+    {
+      "id": "e12",
+      "from": {"node": "format_literary", "port": "json"},
+      "to": {"node": "output", "port": "json"},
+      "type": "data"
+    }
+  ]
+}
