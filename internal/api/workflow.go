@@ -360,6 +360,7 @@ func getDescription(nodeType string) string {
 		"Tool.Validate":            "工具结果校验（占位节点）",
 		"Input.Text":               "文本输入节点",
 		"Output.Text":              "文本输出节点",
+		"Output.SaveFile":          "将文本保存到文件",
 		"Input.JSON":               "JSON输入节点",
 		"Output.JSON":              "JSON输出节点",
 		"Transform.TextToMessages": "将文本转换为消息列表",
@@ -1347,6 +1348,15 @@ func getParamInfo(nodeType string) []ParamInfo {
 				Required:    false,
 				Default:     "flow",
 				Description: "调试标签",
+			},
+		)
+	case "Output.SaveFile":
+		params = append(params,
+			ParamInfo{
+				Name:        "file_path",
+				Type:        "string",
+				Required:    true,
+				Description: "保存文件的路径（相对或绝对路径）",
 			},
 		)
 	}

@@ -106,6 +106,9 @@ func RegisterBuiltinNodes(reg *registry.Registry) error {
 	if err := reg.Register((&io.OutputJSONNode{}).Spec()); err != nil {
 		return err
 	}
+	if err := reg.Register((&io.SaveFileNode{}).Spec()); err != nil {
+		return err
+	}
 
 	// Transform 节点
 	if err := reg.Register((&transform.TextToMessagesNode{}).Spec()); err != nil {

@@ -86,8 +86,8 @@ func (n *ChatNode) Run(ctx context.Context, rc *registry.RunContext, inputs map[
 
 	// 返回两种格式的输出
 	return map[string]any{
-		"messages": []map[string]any{
-			{
+		"messages": []any{
+			map[string]any{
 				"role":    "assistant",
 				"content": response,
 			},

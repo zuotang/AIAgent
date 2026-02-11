@@ -72,7 +72,7 @@ func NewQdrantStore(qdrantURL, apiKey, collection string, embedder func(context.
 		KnowledgeCollection: "knowledge",         // 知识库集合
 		Embedder:            embedder,
 		HTTP: &http.Client{
-			Timeout: 60 * time.Second,
+			Timeout: 600 * time.Second,
 		},
 	}
 }

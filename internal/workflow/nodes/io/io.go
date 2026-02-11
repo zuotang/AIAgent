@@ -2,6 +2,9 @@ package io
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 
 	"agent-langchain/internal/workflow/registry"
 	"agent-langchain/internal/workflow/types"
@@ -116,3 +119,51 @@ func (n *OutputJSONNode) Spec() *registry.NodeSpec {
 		Runner: n,
 	}
 }
+
+// SaveFileNode Output.SaveFile 节点
+// 将文本保存到文件
+type SaveFileNode struct{}
+
+func (n *SaveFileNode) Run(ctx context.Context, rc *registry.RunContext, inputs map[string]any, params map[string]any) (map[string]any, error) {
+	text, ok := inputs["text"].(string)
+	if !ok {
+		return nil, fmt.Errorf("text input is required")
+	}
+
+	filePath, ok := params["file_path"].(string)
+	if !ok || filePath == "" {
+		return nil, fmt.Errorf("file_path parameter is required")
+	}
+
+	// 确保目录存在
+	dir := filepath.Dir(filePath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	// 写入文件
+	if err := os.WriteFile(filePath, []byte(text), 0644); err != nil {
+		return nil, fmt.Errorf("failed to write file: %w", err)
+	}
+
+	return map[string]any{
+		"text":      text,
+		"file_path": filePath,
+	}, nil
+}
+
+func (n *SaveFileNode) Spec() *registry.NodeSpec {
+	return &registry.NodeSpec{
+		Type:    "Output.SaveFile",
+		Version: "1.0",
+		Inputs: []types.PortSpec{
+			{Name: "text", Type: types.PortTypeText, Required: true},
+		},
+		Outputs: []types.PortSpec{
+			{Name: "text", Type: types.PortTypeText, Required: true},
+			{Name: "file_path", Type: types.PortTypeText, Required: true},
+		},
+		Runner: n,
+	}
+}
+
